@@ -11,6 +11,8 @@ const veridaService = require('./Services/veridaService.js');
 const veridaRoutes = require('./routes/verida.js');
 const walletRoutes = require('./routes/wallet');
 
+// Import for algorithm testing
+const { evaluateUser } = require("./controllers/NewScoreController");
 
 dotenv.config(); // Load .env variables
 
@@ -163,6 +165,45 @@ app.get('/api/health', (req, res) => {
 
 // Use routes
 app.use('/api/score', scoreRoutes);
+
+// Test route for algorithm
+app.get("/api/test-algorithm", (req, res) => {
+  try {
+    console.log("Testing algorithm...");
+    const mockTwitter = { 
+      result: { 
+        legacy: { 
+          followers_count: 1000,
+          statuses_count: 500,
+          favourites_count: 200,
+          media_count: 50,
+          listed_count: 5,
+          friends_count: 300
+        },
+        is_blue_verified: true 
+      } 
+    };
+    
+    const mockWallet = { 
+      'Native Balance Result': 10,
+      'Token Balances Result': ['token1', 'token2'],
+      'Active Chains Result': { activeChains: ['ethereum', 'polygon'] },
+      'DeFi Positions Summary Result': ['position1'],
+      'Wallet NFTs Result': ['nft1', 'nft2'],
+      'Transaction Count': 150,
+      'Unique Token Interactions': 10
+    };
+    
+    const mockTelegramGroups = { items: [{ sourceData: { permissions: { can_send_polls: true } } }] };
+    const mockTelegramMessages = { items: [{ sourceData: { content: { _: "messagePhoto" } } }] };
+    
+    const result = evaluateUser(mockTwitter, mockWallet, mockTelegramGroups, mockTelegramMessages);
+    return res.json({ success: true, result });
+  } catch (error) {
+    console.error("Error testing algorithm:", error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 connectDB();
 

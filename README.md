@@ -65,6 +65,9 @@ npm run dev
 ```bash
 cd Backend
 npm test                # Run all tests
+npm run test:watch      # Run tests in watch mode
+npm run test:coverage   # Run tests with coverage
+npm run test:verida     # Run Verida integration tests
 ```
 
 ## Architecture
