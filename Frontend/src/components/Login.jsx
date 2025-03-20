@@ -2,21 +2,55 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useNavigate } from "react-router-dom";
 import { useEffect } from "react";
 import { motion } from "framer-motion";
+import axios from "axios";
 
 const Login = () => {
   const { login, authenticated, user } = usePrivy();
   const navigate = useNavigate();
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  
   useEffect(() => {
     if (authenticated && user) {
-      const username = user?.twitter?.username || "guest";
-      const address = user?.wallet?.address || "null";
-      const privyId = user?.privyId || "null";
+      const username = user?.twitter?.username || null;
+      const address = user?.wallet?.address || null;
+      const privyId = user?.id || null;
+      const email = user?.email?.address || null;
 
-      console.log("Redirecting to:",` /dashboard/${privyId}/${username}/${address}`);
-      navigate(`/dashboard/${privyId}/${username}/${address}`);
+      if (privyId) {
+        // Register user with backend
+        registerUser(privyId, username, address, email);
+        
+        // Store user info in localStorage for persistence
+        localStorage.setItem('userData', JSON.stringify({
+          privyId,
+          username,
+          address,
+          email,
+          loginTime: new Date().toISOString()
+        }));
+        
+        console.log("Redirecting to:",` /dashboard/${privyId}/${username || 'guest'}/${address || 'none'}`);
+        navigate(`/dashboard/${privyId}/${username || 'guest'}/${address || 'none'}`);
+      }
     }
-  }, [authenticated, user, navigate]);
+  }, [authenticated, user, navigate, apiBaseUrl]);
+  
+  // Function to register user with backend
+  const registerUser = async (privyId, username, address, email) => {
+    try {
+      const response = await axios.post(`${apiBaseUrl}/api/user/register`, {
+        privyId,
+        username,
+        walletAddress: address,
+        email,
+        twitterUsername: username
+      });
+      
+      console.log("User registration successful:", response.data);
+    } catch (error) {
+      console.error("Error registering user:", error);
+    }
+  };
 
   return (
     <div

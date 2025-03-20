@@ -105,23 +105,64 @@ const WalletConnect = () => {
     localStorage.setItem(`${walletType}_connected`, walletData?.address || "");
 
     if (user?.id && walletData.address) {
-      fetchUserScore(user.id, walletData.address);
+      fetchUserScore(user.id, walletData.address, walletType);
     }
 
     // ✅ Navigate to Home After Successful Connection
     navigate("/home");
   };
 
-  const fetchUserScore = async (userId, walletAddress) => {
+  const fetchUserScore = async (userId, walletAddress, walletType) => {
     try {
-      console.log("📤 Sending to backend:", { privyId: userId, walletAddress });
-      const response = await axios.post(
-        `${apiBaseUrl}/api/score/get-score`,
-        { privyId: userId, walletAddress }
+      console.log("📤 Sending to backend:", { privyId: userId, walletAddress, walletType });
+      
+      // Get existing wallet data from localStorage
+      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      
+      // Initialize wallets array if it doesn't exist
+      if (!userData.wallets) userData.wallets = [];
+      
+      // Add new wallet if it doesn't exist yet
+      const existingWalletIndex = userData.wallets.findIndex(w => 
+        w.address === walletAddress && w.type === walletType
       );
-
-      const data = response.data;
-      console.log("✅ Backend Response:", data);
+      
+      if (existingWalletIndex === -1) {
+        userData.wallets.push({
+          address: walletAddress,
+          type: walletType
+        });
+        localStorage.setItem('userData', JSON.stringify(userData));
+      }
+      
+      // Make API call with all relevant data
+      const response = await axios.post(
+        `${apiBaseUrl}/api/wallet/connect`,
+        { 
+          privyId: userId, 
+          walletAddress,
+          walletType
+        }
+      );
+      
+      if (response.data.success) {
+        console.log("✅ Wallet connected successfully");
+        
+        // Calculate score
+        const scoreResponse = await axios.post(
+          `${apiBaseUrl}/api/score/get-score`,
+          { 
+            privyId: userId, 
+            walletAddress,
+            walletType,
+            walletAddresses: userData.wallets.map(w => w.address)
+          }
+        );
+        
+        console.log("✅ Score calculated:", scoreResponse.data);
+      } else {
+        console.error("❌ Failed to connect wallet:", response.data.error);
+      }
     } catch (error) {
       console.error("❌ Failed to fetch user score:", error.response?.data || error);
     }

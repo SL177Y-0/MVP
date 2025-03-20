@@ -84,6 +84,7 @@ router.get('/auth/callback', async (req, res) => {
     
     // Extract token from request (might be auth_token or token)
     let authToken = req.query.auth_token || req.query.token;
+    let did = null;
     
     // Log token format before parsing
     if (authToken) {
@@ -94,174 +95,98 @@ router.get('/auth/callback', async (req, res) => {
         // Check if it's a JSON string
         if (authToken.startsWith('{')) {
           console.log(`🔑 Token appears to be JSON format`);
-        } else if (authToken.startsWith('ey')) {
-          console.log(`🔑 Token appears to be JWT format`);
+          try {
+            const tokenObj = JSON.parse(authToken);
+            if (tokenObj.token && tokenObj.token.did) {
+              did = tokenObj.token.did;
+              authToken = tokenObj.token._id || tokenObj.token;
+            }
+          } catch (e) {
+            console.error(`❌ Error parsing JSON token: ${e.message}`);
+          }
         }
       } else {
         console.log(`🔑 Raw token type: ${typeof authToken}`);
       }
-    } else {
-      console.log(`⚠️ No token found in query parameters`);
-      // Check for other authentication parameters
-      if (req.query.did) {
-        console.log(`🆔 DID found in query parameters: ${req.query.did}`);
-      }
     }
     
-    // Try to parse token if it's a JSON string
-    if (authToken && typeof authToken === 'string' && authToken.startsWith('{')) {
+    // If DID is not extracted yet, try to get it from the service
+    if (authToken && !did) {
       try {
-        const tokenObj = JSON.parse(authToken);
-        console.log(`📦 Token parsed as JSON object with keys: ${Object.keys(tokenObj).join(', ')}`);
-        
-        // Examine token structure
-        if (tokenObj.token) {
-          console.log(`🔑 Token object contains 'token' property`);
-          
-          if (typeof tokenObj.token === 'string') {
-            console.log(`🔑 Inner token is a string, length: ${tokenObj.token.length}`);
-            authToken = tokenObj.token;
-          } else if (typeof tokenObj.token === 'object') {
-            console.log(`🔑 Inner token is an object with keys: ${Object.keys(tokenObj.token).join(', ')}`);
-            // Check for did in the token object
-            if (tokenObj.token.did) {
-              console.log(`🆔 DID found in token object: ${tokenObj.token.did}`);
-            }
-            // For now, keep the entire object as the token
-            authToken = tokenObj.token;
-          }
-        }
-      } catch (e) {
-        console.warn(`⚠️ Failed to parse token as JSON: ${e.message}`);
+        did = await veridaService.getUserDID(authToken);
+        console.log(`✅ Retrieved DID from auth token: ${did}`);
+      } catch (error) {
+        console.error(`❌ Error getting DID from token: ${error.message}`);
       }
     }
     
+    // If we have no auth token, redirect to frontend with error
     if (!authToken) {
-      throw new Error('No auth token found in callback parameters');
+      console.error('❌ No auth token found in request');
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/verida-error?error=No_auth_token`);
     }
     
-    // Generate a userId (use DID if available or generate one based on timestamp)
-    let userId = req.query.did || `verida_${Date.now()}`;
-    console.log(`👤 Using user ID: ${userId}`);
+    // Get privyId from query or session
+    const privyId = req.query.privyId || req.query.userId || req.session?.privyId;
     
-    // Store the auth token
-    veridaService.storeAuthToken(userId, authToken);
-    
-    // Immediately try to extract DID and fetch user data
-    console.log(`\n🔍 ATTEMPTING TO FETCH USER DATA 🔍`);
-    console.log(`=================================`);
-    
-    try {
-      // Try to get the user's DID
-      console.log(`🔍 Fetching user DID...`);
-      const did = await veridaService.getUserDID(authToken);
-      if (did) {
-        console.log(`✅ Retrieved DID: ${did}`);
-        userId = did; // Use DID as userId for better consistency
-        // Re-store token with the DID as key
-        veridaService.storeAuthToken(userId, authToken);
-      }
-    } catch (didError) {
-      console.error(`❌ Error fetching user DID: ${didError.message}`);
+    if (!privyId) {
+      console.error('❌ No privyId found in request');
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      return res.redirect(`${frontendUrl}/verida-error?error=No_privyId&did=${did || 'unknown'}&authToken=${authToken}`);
     }
     
-    // Create or find the user in the database
-    console.log(`🔍 Finding or creating user in database...`);
-    let user = await User.findOne({ privyId: userId });
+    // Update user with Verida info
+    const user = await User.findOne({ privyId });
     
-    if (!user) {
-      console.log(`👤 User not found, creating new user with privyId: ${userId}`);
-      user = new User({
-        privyId: userId,
-        veridaConnected: true,
-        veridaUserId: userId,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-      await user.save();
-      console.log(`✅ New user created in database`);
-    } else {
-      console.log(`👤 User found in database: ${user._id}`);
-      // Update Verida connection status
+    if (user) {
       user.veridaConnected = true;
-      user.veridaUserId = userId;
-      user.updatedAt = new Date();
+      user.veridaUserId = did;
       await user.save();
-      console.log(`✅ User updated in database`);
-    }
-    
-    // Fetch Telegram Groups
-    console.log(`\n📋 FETCHING TELEGRAM DATA 📋`);
-    console.log(`=============================`);
-    
-    console.log(`📋 Fetching Telegram groups for user ${userId}...`);
-    let groups = [];
-    try {
-      groups = await veridaService.getTelegramGroups(userId);
-      console.log(`✅ Retrieved ${groups.length} Telegram groups`);
-    } catch (groupError) {
-      console.error(`❌ Error fetching Telegram groups: ${groupError.message}`);
-    }
-    
-    // Fetch Telegram Messages
-    console.log(`📋 Fetching Telegram messages for user ${userId}...`);
-    let messages = [];
-    try {
-      messages = await veridaService.getTelegramMessages(userId);
-      console.log(`✅ Retrieved ${messages.length} Telegram messages`);
-    } catch (messageError) {
-      console.error(`❌ Error fetching Telegram messages: ${messageError.message}`);
-    }
-    
-    // Calculate the Verida score
-    console.log(`\n🧮 CALCULATING SCORE 🧮`);
-    console.log(`=======================`);
-    
-    let veridaScore = 0;
-    try {
-      console.log(`🧮 Calculating Verida score based on ${groups.length} groups and ${messages.length} messages...`);
-      const scoreResult = await veridaService.calculateVeridaScore(userId);
-      veridaScore = scoreResult.score;
-      console.log(`✅ Calculated Verida score: ${veridaScore}`);
       
-      // Update user's score in database
-      if (user) {
-        if (!user.scoreDetails) {
-          user.scoreDetails = {};
+      console.log(`✅ Updated user ${privyId} with Verida DID: ${did}`);
+      
+      // Get Telegram data from Verida
+      try {
+        const telegramData = await veridaService.getTelegramData(did, authToken);
+        console.log(`✅ Retrieved Telegram data for DID: ${did}`);
+        
+        // Update user's score with Telegram data
+        let score = await Score.findOne({ privyId });
+        
+        if (!score) {
+          score = new Score({
+            privyId,
+            username: user.username,
+            telegramScore: 0
+          });
         }
-        user.scoreDetails.veridaScore = veridaScore;
-        user.totalScore = (user.scoreDetails.twitterScore || 0) + 
-                          (user.scoreDetails.walletScore || 0) + 
-                          veridaScore;
-        await user.save();
-        console.log(`✅ User score updated in database`);
+        
+        // Calculate Telegram score
+        const telegramScore = calculateFOMOscore(telegramData);
+        score.telegramScore = telegramScore;
+        
+        // Recalculate total score
+        const walletTotal = score.wallets?.reduce((acc, w) => acc + (w.score || 0), 0) || 0;
+        score.totalScore = (score.twitterScore || 0) + walletTotal + telegramScore;
+        
+        await score.save();
+        console.log(`✅ Updated score for user ${privyId}: Telegram(${telegramScore}), Total(${score.totalScore})`);
+      } catch (error) {
+        console.error(`❌ Error processing Telegram data: ${error.message}`);
       }
-    } catch (scoreError) {
-      console.error(`❌ Error calculating Verida score: ${scoreError.message}`);
+    } else {
+      console.error(`❌ User with privyId ${privyId} not found`);
     }
     
-    // Build the redirect URL with success parameters
+    // Redirect to frontend with successful connection
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const redirectUrl = `${frontendUrl}/verida?status=success&userId=${encodeURIComponent(userId)}&score=${veridaScore}`;
-    
-    console.log(`\n🔀 REDIRECTING TO FRONTEND 🔀`);
-    console.log(`=============================`);
-    console.log(`🔀 Redirect URL: ${redirectUrl}`);
-    console.log(`=============================\n`);
-    
-    return res.redirect(redirectUrl);
+    return res.redirect(`${frontendUrl}/dashboard/${privyId}?veridaConnected=true&did=${did}`);
     
   } catch (error) {
-    console.error(`\n❌ ERROR PROCESSING CALLBACK ❌`);
-    console.error(`=============================`);
-    console.error(`❌ Error: ${error.message}`);
-    console.error(`❌ Stack: ${error.stack}`);
-    console.error(`=============================\n`);
-    
-    // Redirect back to the frontend with error parameters
+    console.error(`❌ Error in Verida auth callback: ${error.message}`);
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const errorMessage = encodeURIComponent(error.message);
-    return res.redirect(`${frontendUrl}/verida?status=error&message=${errorMessage}`);
+    return res.redirect(`${frontendUrl}/verida-error?error=${encodeURIComponent(error.message)}`);
   }
 });
 
@@ -333,13 +258,14 @@ router.post('/update-status', async (req, res) => {
   console.log(`==========================`);
   
   try {
-    const { privyId, veridaConnected = true, veridaUserId, score } = req.body;
+    const { privyId, veridaConnected = true, veridaUserId, score, walletAddresses } = req.body;
     
     console.log(`📥 Received request to update Verida status:`);
     console.log(`👤 User ID: ${privyId}`);
     console.log(`🔌 Verida Connected: ${veridaConnected}`);
     console.log(`🔑 Verida User ID: ${veridaUserId}`);
     console.log(`📊 Score Provided: ${score !== undefined ? score : 'No'}`);
+    console.log(`💼 Wallet Addresses: ${walletAddresses ? walletAddresses.length : 0} provided`);
     
     if (!privyId) {
       throw new Error('User ID (privyId) is required');
@@ -354,7 +280,8 @@ router.post('/update-status', async (req, res) => {
     const updateResult = await scoreService.updateVeridaStatus({
       privyId,
       veridaConnected,
-      veridaUserId
+      veridaUserId,
+      walletAddresses
     });
     
     if (!updateResult.success) {

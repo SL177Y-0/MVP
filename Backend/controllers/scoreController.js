@@ -2,6 +2,7 @@ const { getUserDetails } = require("./twitterController.js");
 const { getWalletDetails } = require("./BlockchainController.js");
 const { getTelegramData } = require("../Services/veridaService.js");
 const Score = require("../models/Score");
+const User = require("../models/User");
 
 // ✅ Function to Handle Score Updates (Twitter + Wallets + Telegram)
 async function calculateScore(req, res) {
@@ -225,12 +226,43 @@ async function calculateTotalScore(privyId) {
 
     if (!userEntry) return 0;
 
-    const walletTotal = userEntry.wallets?.reduce((acc, curr) => acc + curr.score, 0) || 0;
+    // Calculate wallet total score (sum of all wallet scores)
+    const walletTotal = userEntry.wallets?.reduce((acc, curr) => acc + (curr.score || 0), 0) || 0;
+    
+    // Ensure each component score is a number (default to 0 if undefined)
+    const twitterScore = userEntry.twitterScore || 0;
+    const telegramScore = userEntry.telegramScore || 0;
     
     // ✅ Add all scores together
-    userEntry.totalScore = (userEntry.twitterScore || 0) + walletTotal + (userEntry.telegramScore || 0);
+    userEntry.totalScore = twitterScore + walletTotal + telegramScore;
+    
+    console.log(`Score Breakdown for ${privyId}:`);
+    console.log(`- Twitter: ${twitterScore}`);
+    console.log(`- Wallet: ${walletTotal}`);
+    console.log(`- Telegram: ${telegramScore}`);
+    console.log(`- Total: ${userEntry.totalScore}`);
 
     await userEntry.save();
+
+    // Also update User model if it exists
+    try {
+        const user = await User.findOne({ privyId });
+        if (user) {
+            user.totalScore = userEntry.totalScore;
+            user.scoreDetails = {
+                twitterScore: twitterScore,
+                walletScore: walletTotal,
+                veridaScore: telegramScore,
+                walletDetails: {
+                    walletCount: userEntry.wallets?.length || 0,
+                    totalWalletScore: walletTotal
+                }
+            };
+            await user.save();
+        }
+    } catch (err) {
+        console.error(`Error updating User model with score: ${err.message}`);
+    }
 
     return userEntry.totalScore;
 }
@@ -291,10 +323,20 @@ async function getTelegramScore(req, res) {
 
 // ✅ Utility Function for Scoring
 function calculateDynamicScore(value, weight, thresholds) {
-    if (value > thresholds.high) return weight * 5;
-    if (value > thresholds.medium) return weight * 3;
-    if (value > thresholds.low) return weight * 1;
-    return 0;
+    if (!value || value <= 0) return 0;
+    
+    if (value <= thresholds.low) {
+        return value * weight;
+    } else if (value <= thresholds.medium) {
+        return thresholds.low * weight + (value - thresholds.low) * weight * 0.75;
+    } else if (value <= thresholds.high) {
+        return thresholds.low * weight + (thresholds.medium - thresholds.low) * weight * 0.75 + 
+               (value - thresholds.medium) * weight * 0.5;
+    } else {
+        return thresholds.low * weight + (thresholds.medium - thresholds.low) * weight * 0.75 + 
+               (thresholds.high - thresholds.medium) * weight * 0.5 + 
+               (value - thresholds.high) * weight * 0.25;
+    }
 }
 
 // ✅ Generate Twitter Score Based on User Data
@@ -319,18 +361,46 @@ function generateTwitterScore(userData) {
 
 // ✅ Generate Wallet Score Based on Wallet Data
 function generateWalletScore(walletData) {
-    let cryptoScore = 0;
-    let nftScore = 0;
-
-    const activeChains = walletData?.activeChains?.length || 0;
-    cryptoScore += activeChains > 1 ? 20 : activeChains === 1 ? 10 : 0;
-
-    if ((walletData?.nativeBalance || 0) > 1) cryptoScore += 10;
-    if ((walletData?.defiPositionsSummary?.length || 0) > 0) cryptoScore += 10;
-
-    nftScore = (walletData?.walletNFTs?.length || 0) > 0 ? 20 : 0;
-
-    return { score: Math.max(cryptoScore + nftScore, 10) };
+    if (!walletData) return { score: 10 }; // Default score if no data
+    
+    let score = 0;
+    
+    // Base score for having a wallet
+    score += 10;
+    
+    // ✅ Balance Score
+    const balance = parseFloat(walletData['Native Balance Result'] || 0);
+    if (balance > 0.1) score += 5;
+    if (balance > 1) score += 10;
+    if (balance > 5) score += 15;
+    
+    // ✅ Token Variety Score
+    const tokens = walletData['Token Balances Result'] || [];
+    score += Math.min(tokens.length * 2, 20); // Up to 20 points for tokens
+    
+    // ✅ Chain Diversity Score
+    const chains = walletData['Active Chains Result']?.activeChains || [];
+    score += Math.min(chains.length * 5, 25); // Up to 25 points for multiple chains
+    
+    // ✅ DeFi Usage Score
+    const defiPositions = walletData['DeFi Positions Summary Result'] || [];
+    score += Math.min(defiPositions.length * 7, 35); // Up to 35 points for DeFi
+    
+    // ✅ NFT Ownership Score
+    const nfts = walletData['Wallet NFTs Result'] || [];
+    score += Math.min(nfts.length * 3, 30); // Up to 30 points for NFTs
+    
+    // ✅ Transaction History Score
+    const txCount = walletData['Transaction Count'] || 0;
+    if (txCount > 10) score += 10;
+    if (txCount > 50) score += 15;
+    if (txCount > 100) score += 25;
+    
+    // ✅ Token Interaction Diversity Score
+    const uniqueTokenInteractions = walletData['Unique Token Interactions'] || 0;
+    score += Math.min(uniqueTokenInteractions * 3, 30); // Up to 30 points
+    
+    return { score };
 }
 
 module.exports = { calculateScore, getTotalScore, getTelegramScore };

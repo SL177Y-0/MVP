@@ -14,8 +14,25 @@ async function CollectData(req, res) {
         if (req.method === "POST") {
             if (!privyId && req.body.privyId) privyId = req.body.privyId;
             if (!username && req.body.userId) username = req.body.userId;
+            if (!username && req.body.twitterUsername) username = req.body.twitterUsername;
             if (!address && req.body.walletAddress) address = req.body.walletAddress;
             if (!email && req.body.email) email = req.body.email;
+        }
+        
+        // Handle multiple wallet addresses
+        let walletAddresses = [];
+        if (req.body.walletAddresses && Array.isArray(req.body.walletAddresses)) {
+            walletAddresses = req.body.walletAddresses;
+            console.log(`📦 Processing ${walletAddresses.length} wallet addresses from request`);
+            
+            // Use the first address if no primary address is specified
+            if (!address && walletAddresses.length > 0) {
+                address = walletAddresses[0];
+                console.log(`Using first wallet address as primary: ${address}`);
+            }
+        } else if (address) {
+            // If only a single address is provided, add it to the array
+            walletAddresses = [address];
         }
 
         // Use privyId from userDid if not provided directly
@@ -29,9 +46,9 @@ async function CollectData(req, res) {
         }
 
         // Extract Telegram-related data
-        const { userDid, authToken } = req.body;
+        const { userDid, authToken, veridaUserId, veridaConnected, twitterConnected, walletConnected } = req.body;
 
-        console.log(`📢 Fetching data for: PrivyID(${privyId}), Twitter(${username || "None"}), Wallet(${address || "None"}), Verida Auth(${authToken ? "Provided" : "None"})`);
+        console.log(`📢 Fetching data for: PrivyID(${privyId}), Twitter(${username || "None"}), Wallets(${walletAddresses.length}), Verida Auth(${authToken ? "Provided" : "None"})`);
 
         let userData = null;
         let walletData = {};
@@ -51,11 +68,11 @@ async function CollectData(req, res) {
             userData = { result: { legacy: {} } }; // Provide empty structure to prevent errors
         }
 
-        // ✅ Fetch Wallet Data
+        // ✅ Fetch Wallet Data for the primary address
         if (address) {
             try {
                 walletData = await getWalletDetails(address);
-                console.log("✅ Wallet data fetched successfully");
+                console.log("✅ Wallet data fetched successfully for primary address");
             } catch (err) {
                 console.error("❌ Error fetching wallet data:", err.message);
                 // Initialize empty wallet data structure
@@ -124,65 +141,77 @@ async function CollectData(req, res) {
             // Update score record with new calculated scores
             scoreRecord.twitterScore = evaluationResult.scores.socialScore || 0;
             scoreRecord.telegramScore = evaluationResult.scores.telegramScore || 0;
-            scoreRecord.totalScore = evaluationResult.scores.totalScore || 0;
             
             // Add badges 
             scoreRecord.badges = Object.keys(evaluationResult.badges);
             
-            // Update wallet record if address is provided
-            if (address) {
-                const walletIndex = scoreRecord.wallets.findIndex(w => w.walletAddress === address);
-                const walletScore = (evaluationResult.scores.cryptoScore || 0) + (evaluationResult.scores.nftScore || 0);
+            // Process all wallet addresses
+            let totalWalletScore = 0;
+            
+            // Update each wallet in the walletAddresses array
+            for (const walletAddress of walletAddresses) {
+                if (!walletAddress) continue;
+                
+                // Check if this wallet already exists in the record
+                const walletIndex = scoreRecord.wallets.findIndex(w => w.walletAddress === walletAddress);
+                
+                // For the primary address, use the calculated score
+                // For other addresses, assign a default score if they don't exist
+                const walletScore = (walletAddress === address) 
+                    ? (evaluationResult.scores.cryptoScore || 0) + (evaluationResult.scores.nftScore || 0)
+                    : 10; // Default score for additional wallets
                 
                 if (walletIndex >= 0) {
-                    scoreRecord.wallets[walletIndex].score = walletScore;
-                    console.log(`✅ Updated existing wallet score: ${address} = ${walletScore}`);
+                    // Only update the score for the primary address
+                    if (walletAddress === address) {
+                        scoreRecord.wallets[walletIndex].score = walletScore;
+                        console.log(`✅ Updated existing wallet score: ${walletAddress} = ${walletScore}`);
+                    } else {
+                        console.log(`ℹ️ Existing additional wallet: ${walletAddress}, score = ${scoreRecord.wallets[walletIndex].score}`);
+                    }
                 } else {
+                    // Add the new wallet
                     scoreRecord.wallets.push({
-                        walletAddress: address,
+                        walletAddress: walletAddress,
                         score: walletScore
                     });
-                    console.log(`✅ Added new wallet with score: ${address} = ${walletScore}`);
-                }
-                
-                // Recalculate total wallet score as the sum of all wallet scores
-                const totalWalletScore = scoreRecord.wallets.reduce((sum, wallet) => sum + wallet.score, 0);
-                
-                // Update user's score components and total
-                if (user) {
-                    if (!user.scoreDetails) {
-                        user.scoreDetails = {};
-                    }
-                    
-                    user.scoreDetails.walletScore = totalWalletScore;
-                    
-                    // Recalculate total score
-                    user.totalScore = 
-                        (user.scoreDetails.twitterScore || 0) + 
-                        totalWalletScore + 
-                        (user.scoreDetails.veridaScore || 0);
-                        
-                    console.log(`✅ Updated user's total score to: ${user.totalScore}`);
+                    console.log(`✅ Added new wallet with score: ${walletAddress} = ${walletScore}`);
                 }
             }
             
+            // Recalculate total wallet score as the sum of all wallet scores
+            totalWalletScore = scoreRecord.wallets.reduce((sum, wallet) => sum + wallet.score, 0);
+            
+            // Update total score
+            scoreRecord.totalScore = scoreRecord.twitterScore + scoreRecord.telegramScore + totalWalletScore;
+            
+            // Save the score record
             await scoreRecord.save();
-            console.log(`✅ Score updated for PrivyID: ${privyId}`);
+            console.log(`✅ Score updated for PrivyID: ${privyId}, Total score: ${scoreRecord.totalScore}`);
             
             // Also update User model if it exists
             const user = await User.findOne({ privyId });
             if (user) {
-                user.totalScore = evaluationResult.scores.totalScore || 0;
+                // Update connection statuses if provided
+                if (veridaConnected !== undefined) user.veridaConnected = veridaConnected;
+                if (veridaUserId) user.veridaUserId = veridaUserId;
+                if (twitterConnected !== undefined) user.twitterConnected = twitterConnected;
+                if (walletConnected !== undefined) user.walletConnected = walletConnected;
+                if (username) user.twitterUsername = username;
                 
+                // Update overall total score
+                user.totalScore = scoreRecord.totalScore;
+                
+                // Update score components
                 if (!user.scoreDetails) {
                     user.scoreDetails = {};
                 }
                 
                 user.scoreDetails.twitterScore = evaluationResult.scores.socialScore || 0;
-                user.scoreDetails.walletScore = 
-                    (evaluationResult.scores.cryptoScore || 0) + (evaluationResult.scores.nftScore || 0);
+                user.scoreDetails.walletScore = totalWalletScore;
                 user.scoreDetails.veridaScore = evaluationResult.scores.telegramScore || 0;
                 
+                // Update detailed score breakdown
                 user.scoreDetails.twitterDetails = { 
                     socialScore: evaluationResult.scores.socialScore,
                     badges: Object.keys(evaluationResult.badges).filter(badge => 
@@ -198,6 +227,8 @@ async function CollectData(req, res) {
                 user.scoreDetails.walletDetails = { 
                     cryptoScore: evaluationResult.scores.cryptoScore,
                     nftScore: evaluationResult.scores.nftScore,
+                    totalWalletScore: totalWalletScore,
+                    walletCount: scoreRecord.wallets.length,
                     badges: Object.keys(evaluationResult.badges).filter(badge => 
                         ["Chain Explorer", "Token Holder", "NFT Networker", 
                          "DeFi Drifter", "Gas Spender", "Staking Veteran", 
@@ -235,7 +266,8 @@ async function CollectData(req, res) {
             privyId,
             title: evaluationResult.title,
             badges: evaluationResult.badges,
-            scores: evaluationResult.scores
+            scores: evaluationResult.scores,
+            walletCount: walletAddresses.length
         });
 
     } catch (error) {

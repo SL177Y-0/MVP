@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { usePrivy } from "@privy-io/react-auth";
 
-function Verida() {
+function Verida({ setVeridaConnected }) {
   const location = useLocation();
   const { user } = usePrivy();
   const [connected, setConnected] = useState(false);
@@ -31,12 +31,27 @@ function Verida() {
       console.log('👤 User ID:', user.id);
     }
     
+    // Check if user has Verida connected in localStorage
+    const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+    if (userData.veridaConnected && userData.veridaUserId) {
+      console.log('✅ User already has Verida connected:', userData.veridaUserId);
+      setConnected(true);
+      setUserId(userData.veridaUserId);
+      if (typeof setVeridaConnected === 'function') {
+        setVeridaConnected(true);
+      }
+      return;
+    }
+    
     // Handle error from callback
     if (errorParam) {
       console.error('❌ Authentication error:', errorParam, errorMessage);
       setError(errorMessage || 'Failed to authenticate with Verida.');
       setConnected(false);
       setLoading(false);
+      if (typeof setVeridaConnected === 'function') {
+        setVeridaConnected(false);
+      }
       return;
     }
     
@@ -48,6 +63,10 @@ function Verida() {
       setUserId(userIdParam);
       setConnected(true);
       
+      if (typeof setVeridaConnected === 'function') {
+        setVeridaConnected(true);
+      }
+      
       if (user?.id) {
         console.log('🔄 Updating Verida status with backend...');
         updateUserVeridaStatus(userIdParam, score);
@@ -55,7 +74,7 @@ function Verida() {
         console.warn('⚠️ User not logged in, cannot update Verida status');
       }
     }
-  }, [location, user]);
+  }, [location, user, setVeridaConnected]);
 
   const updateUserVeridaStatus = async (veridaUserId, scoreValue) => {
     console.log(`📤 Updating user Verida status with userId: ${veridaUserId}, score: ${scoreValue || 'not provided'}`);
@@ -70,11 +89,21 @@ function Verida() {
       setLoading(true);
       setError(null);
 
+      // Get user data from localStorage
+      const userData = JSON.parse(localStorage.getItem('userData') || '{}');
+      
+      // Get wallet addresses if available
+      const walletAddresses = userData.wallets ? 
+        userData.wallets.map(wallet => wallet.address) : [];
+      
       const data = {
         privyId: user.id,
         veridaUserId,
+        veridaConnected: true,
         // Include score if available
-        score: scoreValue ? parseInt(scoreValue, 10) : undefined
+        score: scoreValue ? parseInt(scoreValue, 10) : undefined,
+        // Include wallet information if available
+        walletAddresses
       };
       
       console.log(`📤 Sending data to backend:`, data);
@@ -86,6 +115,11 @@ function Verida() {
         console.log('✅ Verida status updated successfully');
         setConnected(true);
         
+        // Store Verida connection in localStorage
+        userData.veridaConnected = true;
+        userData.veridaUserId = veridaUserId;
+        localStorage.setItem('userData', JSON.stringify(userData));
+        
         // If we received a score from the API that wasn't passed in the URL
         if (!scoreValue && response.data.score) {
           console.log(`📊 Setting score from API: ${response.data.score}`);
@@ -95,6 +129,30 @@ function Verida() {
           const scoreNum = parseInt(scoreValue, 10) || 0;
           console.log(`📊 Setting score from URL parameter: ${scoreNum}`);
           setScore(scoreNum);
+        }
+        
+        // Calculate full score with all connected data sources
+        try {
+          console.log('📊 Calculating full score with all data sources...');
+          
+          const scoreData = {
+            privyId: user.id,
+            veridaUserId,
+            walletAddresses
+          };
+          
+          const scoreResponse = await axios.post(`${apiBaseUrl}/api/score/get-score`, scoreData);
+          
+          if (scoreResponse.data.success) {
+            console.log('✅ Full score calculated:', scoreResponse.data);
+            
+            // Update user data with score information
+            userData.totalScore = scoreResponse.data.scores.totalScore;
+            userData.badges = Object.keys(scoreResponse.data.badges || {});
+            localStorage.setItem('userData', JSON.stringify(userData));
+          }
+        } catch (scoreError) {
+          console.error('❌ Error calculating full score:', scoreError);
         }
       } else {
         console.error('❌ Failed to update Verida status:', response.data.error);
