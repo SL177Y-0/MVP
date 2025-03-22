@@ -1,132 +1,149 @@
 const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
-const { calculateScore } = require("../Services/scoreService");
+const { CollectData } = require("../controllers/NewScoreController");
 const Score = require("../models/Score");
-const Wallet = require('../models/Wallet');
-const { getWalletDetails } = require('../controllers/BlockchainController');
-const mongoose = require('mongoose');
 
 // Connect wallet
 router.post("/connect", async (req, res) => {
   try {
-    const { privyId, walletAddress, chainId } = req.body;
+    console.log(`Wallet connect request received: ${JSON.stringify(req.body)}`);
     
-    if (!privyId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Privy ID is required" 
-      });
+    const { privyId, walletAddress, walletAddresses } = req.body;
+
+    if (!privyId || !walletAddress) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
-    
-    if (!walletAddress) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Wallet address is required" 
-      });
-    }
-    
-    console.log(`📢 Connecting wallet: ${walletAddress} to user: ${privyId}`);
-    
-    // Find user by privyId
-    const user = await User.findOne({ privyId });
+
+    // Find user
+    let user = await User.findOne({ privyId });
     
     if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "User not found" 
-      });
-    }
-    
-    // Update user with wallet connection status
-    user.walletConnected = true;
-    user.walletAddress = walletAddress;
-    await user.save();
-    
-    // Check if wallet already exists
-    let wallet = await Wallet.findOne({ 
-      userId: user._id, 
-      address: walletAddress 
-    });
-    
-    // If wallet doesn't exist, create it
-    if (!wallet) {
-      wallet = new Wallet({
-        userId: user._id,
-        address: walletAddress,
-        chainId: chainId || null,
-        createdAt: new Date()
-      });
-      
-      // Get wallet details from blockchain
       try {
-        const walletData = await getWalletDetails(walletAddress);
-        if (walletData) {
-          wallet.balance = walletData['Native Balance Result'] || 0;
-        }
+        // Create new user with minimal fields
+        // Don't set email field at all to avoid duplicate key errors
+        user = new User({
+          privyId,
+          walletConnected: true,
+          walletAddress
+          // Email intentionally omitted to avoid duplicacy issues
+        });
+        await user.save();
+        console.log(`New user created: ${user._id}`);
       } catch (error) {
-        console.error(`Error fetching wallet details: ${error.message}`);
-        // Continue even if wallet details can't be fetched
+        // Handle MongoDB duplicate key errors
+        if (error.code === 11000) {
+          console.log(`Duplicate key error: ${error.message}`);
+          
+          // Try to find the user again in case it was created in another request
+          user = await User.findOne({ privyId });
+          
+          if (user) {
+            // Update the existing user
+            user.walletConnected = true;
+            user.walletAddress = walletAddress;
+            await user.save();
+            console.log(`Found user after duplicate error: ${user._id}`);
+          } else {
+            // This shouldn't happen but handle it anyway
+            return res.status(500).json({
+              error: "Database conflict error",
+              details: error.message
+            });
+          }
+        } else {
+          console.error("Error creating user:", error);
+          return res.status(500).json({
+            error: "Failed to create user",
+            details: error.message
+          });
+        }
+      }
+    } else {
+      // Update existing user
+      user.walletConnected = true;
+      user.walletAddress = walletAddress;
+      await user.save();
+      console.log(`User updated: ${user._id}`);
+    }
+
+    // Handle Score model
+    let scoreRecord = await Score.findOne({ privyId });
+    
+    if (!scoreRecord) {
+      try {
+        // Create new score record
+        const wallets = walletAddresses 
+          ? walletAddresses.map(addr => ({ walletAddress: addr, score: 0 }))
+          : [{ walletAddress, score: 0 }];
+        
+        scoreRecord = new Score({ 
+          privyId,
+          wallets
+        });
+        await scoreRecord.save();
+        console.log(`New score record created: ${scoreRecord._id}`);
+      } catch (error) {
+        // Handle potential duplicate key errors in score creation
+        if (error.code === 11000) {
+          console.log(`Duplicate key error for score: ${error.message}`);
+          
+          // Try to find the score record again
+          scoreRecord = await Score.findOne({ privyId });
+          
+          if (!scoreRecord) {
+            console.error("Failed to find or create score record after duplicate error");
+            // Continue execution, even without score record
+          }
+        } else {
+          console.error("Error creating score record:", error);
+          // Continue execution, even without score record
+        }
+      }
+    }
+
+    if (scoreRecord) {
+      // Update existing score record
+      if (walletAddresses && Array.isArray(walletAddresses)) {
+        for (const addr of walletAddresses) {
+          const walletExists = scoreRecord.wallets.some(w => w.walletAddress === addr);
+          if (!walletExists) {
+            scoreRecord.wallets.push({
+              walletAddress: addr,
+              score: 0
+            });
+          }
+        }
+      } else if (walletAddress) {
+        const walletExists = scoreRecord.wallets.some(w => w.walletAddress === walletAddress);
+        if (!walletExists) {
+          scoreRecord.wallets.push({
+            walletAddress,
+            score: 0
+          });
+        }
       }
       
-      await wallet.save();
+      try {
+        await scoreRecord.save();
+        console.log(`Score record updated: ${scoreRecord._id}`);
+      } catch (error) {
+        console.error("Error updating score record:", error);
+        // Continue execution, even with score record save error
+      }
     }
-    
-    // Update Score entry
-    let score = await Score.findOne({ privyId });
-    
-    if (!score) {
-      score = new Score({
-        privyId,
-        username: user.username,
-        email: user.email,
-        twitterScore: 0,
-        telegramScore: 0,
-        totalScore: 0,
-        wallets: []
-      });
-    }
-    
-    // Check if wallet already exists in score.wallets
-    const walletExists = score.wallets.some(w => w.walletAddress === walletAddress);
-    
-    if (!walletExists) {
-      score.wallets.push({
-        walletAddress,
-        score: 10 // Default initial score
-      });
-    }
-    
-    await score.save();
-    
-    // Calculate new total score
-    const walletTotal = score.wallets.reduce((acc, w) => acc + (w.score || 0), 0);
-    score.totalScore = (score.twitterScore || 0) + (score.telegramScore || 0) + walletTotal;
-    await score.save();
-    
-    // Get all user's wallets for response
-    const userWallets = await Wallet.find({ userId: user._id });
-    
+
     return res.json({
       success: true,
       message: "Wallet connected successfully",
-      user: {
-        privyId: user.privyId,
-        walletConnected: user.walletConnected,
-        totalScore: score.totalScore
-      },
-      wallets: userWallets.map(w => ({
-        address: w.address,
-        balance: w.balance,
-        chainId: w.chainId
-      }))
+      user,
+      score: scoreRecord || { error: "Failed to create or find score record" }
     });
-    
   } catch (error) {
-    console.error(`❌ Error connecting wallet: ${error.message}`);
+    console.error("Error connecting wallet:", error);
     return res.status(500).json({ 
-      success: false, 
-      error: "Server error" 
+      error: "Failed to connect wallet", 
+      details: error.message 
     });
   }
 });
@@ -150,17 +167,40 @@ router.post("/disconnect", async (req, res) => {
       { new: true }
     );
 
-    // Calculate new score
-    await calculateScore(privyId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
-    res.json({
+    // Remove wallet scores by recalculating with no wallet
+    const scoreRequest = {
+      body: {
+        privyId,
+        walletConnected: false
+      },
+      method: "POST"
+    };
+    
+    // Create a mock response object with json method
+    const mockRes = {
+      json: () => {}
+    };
+    
+    // Call CollectData but capture response rather than sending it
+    try {
+      await CollectData(scoreRequest, mockRes);
+      console.log('Score recalculation complete after wallet disconnect');
+    } catch (scoreError) {
+      console.error('Error recalculating score:', scoreError.message);
+    }
+
+    return res.json({
       success: true,
       message: "Wallet disconnected successfully",
       user,
     });
   } catch (error) {
     console.error("Error disconnecting wallet:", error);
-    res.status(500).json({ error: "Failed to disconnect wallet" });
+    return res.status(500).json({ error: "Failed to disconnect wallet", details: error.message });
   }
 });
 
@@ -168,63 +208,29 @@ router.post("/disconnect", async (req, res) => {
 router.get("/status/:privyId", async (req, res) => {
   try {
     const { privyId } = req.params;
-
+    
+    if (!privyId) {
+      return res.status(400).json({ error: "Missing privyId parameter" });
+    }
+    
     const user = await User.findOne({ privyId });
-
+    
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
-
-    res.json({
+    
+    const score = await Score.findOne({ privyId });
+    
+    return res.json({
       walletConnected: user.walletConnected,
       walletAddress: user.walletAddress,
+      wallets: score ? score.wallets : []
     });
   } catch (error) {
     console.error("Error getting wallet status:", error);
-    res.status(500).json({ error: "Failed to get wallet status" });
-  }
-});
-
-// Get all wallets for a user
-router.get('/:privyId', async (req, res) => {
-  try {
-    const { privyId } = req.params;
-    
-    if (!privyId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "Privy ID is required" 
-      });
-    }
-    
-    // Find user by privyId
-    const user = await User.findOne({ privyId });
-    
-    if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "User not found" 
-      });
-    }
-    
-    // Get all wallets for the user
-    const wallets = await Wallet.find({ userId: user._id });
-    
-    return res.json({
-      success: true,
-      wallets: wallets.map(w => ({
-        address: w.address,
-        balance: w.balance,
-        chainId: w.chainId,
-        createdAt: w.createdAt
-      }))
-    });
-    
-  } catch (error) {
-    console.error(`❌ Error fetching wallets: ${error.message}`);
     return res.status(500).json({ 
-      success: false, 
-      error: "Server error" 
+      error: "Failed to get wallet status", 
+      details: error.message 
     });
   }
 });

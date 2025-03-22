@@ -11,9 +11,7 @@ const UserSchema = new mongoose.Schema({
     default: null 
   },
   email: { 
-    type: String, 
-    unique: true,
-    sparse: true
+    type: String,
   },
   twitterConnected: {
     type: Boolean,
@@ -28,7 +26,10 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  walletAddress: String,
+  walletAddress: {
+    type: String,
+    default: null
+  },
   veridaConnected: { 
     type: Boolean, 
     default: false 
@@ -75,6 +76,9 @@ const UserSchema = new mongoose.Schema({
   updatedAt: { 
     type: Date, 
     default: Date.now 
+  },
+  completedTask: {
+    type: Object
   }
 }, {
   timestamps: true,
@@ -87,5 +91,24 @@ UserSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
+
+// Clear any pre-existing email indexes to avoid duplicates
+UserSchema.indexes().forEach(index => {
+  if (index[0].email !== undefined) {
+    UserSchema.index(index[0], { ...index[1], background: true, name: 'email_old_' + Date.now() });
+  }
+});
+
+// Define a single email uniqueness index with proper partial filter expression
+// This ensures only non-null string emails are considered for uniqueness
+UserSchema.index(
+  { email: 1 }, 
+  { 
+    unique: true, 
+    partialFilterExpression: { email: { $type: "string" } },
+    background: true,
+    name: 'email_unique'
+  }
+);
 
 module.exports = mongoose.model("User", UserSchema); 

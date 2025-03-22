@@ -10,9 +10,11 @@ const connectDB = require('./db.js')
 const veridaService = require('./Services/veridaService.js');
 const veridaRoutes = require('./routes/verida.js');
 const walletRoutes = require('./routes/wallet');
+const debugRoutes = require('./routes/debug');
+const chartRoutes = require('./routes/chart.js')
 
 // Import for algorithm testing
-const { evaluateUser } = require("./controllers/NewScoreController");
+const { evaluateUser, CollectData } = require("./controllers/NewScoreController");
 
 dotenv.config(); // Load .env variables
 
@@ -20,20 +22,22 @@ const app = express();
 
 // CORS Configuration
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   credentials: true,
   optionsSuccessStatus: 204
 };
 app.use(cors(corsOptions));
-console.log(`✅ CORS configured for origin: ${process.env.FRONTEND_URL || 'http://localhost:5173'}`);
+console.log(`✅ CORS configured for origin: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 
 app.use(express.json());
 
 // API Routes
+app.use("/api/chart", chartRoutes);
 app.use("/api/twitter", twitterRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/verida", veridaRoutes);
+app.use("/api/debug", debugRoutes);
 
 // Load blockchain routes
 app.use("/api/blockchain", blockchainRoutes);
@@ -167,38 +171,41 @@ app.get('/api/health', (req, res) => {
 app.use('/api/score', scoreRoutes);
 
 // Test route for algorithm
-app.get("/api/test-algorithm", (req, res) => {
+app.get("/api/test-algorithm", async (req, res) => {
   try {
-    console.log("Testing algorithm...");
-    const mockTwitter = { 
-      result: { 
-        legacy: { 
-          followers_count: 1000,
-          statuses_count: 500,
-          favourites_count: 200,
-          media_count: 50,
-          listed_count: 5,
-          friends_count: 300
-        },
-        is_blue_verified: true 
-      } 
+    console.log("Testing algorithm with full controller flow...");
+    
+    // Create mock request with test data
+    const mockReq = {
+      method: "POST",
+      body: {
+        privyId: "test-user-" + Date.now(),
+        twitterUsername: "testuser",
+        walletAddress: "0xTestWalletAddress",
+        userDid: "did:test:123",
+        authToken: "test-token"
+      }
     };
     
-    const mockWallet = { 
-      'Native Balance Result': 10,
-      'Token Balances Result': ['token1', 'token2'],
-      'Active Chains Result': { activeChains: ['ethereum', 'polygon'] },
-      'DeFi Positions Summary Result': ['position1'],
-      'Wallet NFTs Result': ['nft1', 'nft2'],
-      'Transaction Count': 150,
-      'Unique Token Interactions': 10
+    // Create a mock response to capture the output
+    const mockRes = {
+      status: (code) => ({ 
+        json: (data) => {
+          console.log(`Test returned status ${code} with data:`, data);
+          return res.status(code).json(data);
+        }
+      }),
+      json: (data) => {
+        console.log("Test completed successfully");
+        return res.json({
+          success: true,
+          result: data
+        });
+      }
     };
     
-    const mockTelegramGroups = { items: [{ sourceData: { permissions: { can_send_polls: true } } }] };
-    const mockTelegramMessages = { items: [{ sourceData: { content: { _: "messagePhoto" } } }] };
-    
-    const result = evaluateUser(mockTwitter, mockWallet, mockTelegramGroups, mockTelegramMessages);
-    return res.json({ success: true, result });
+    // Call the full controller function
+    await CollectData(mockReq, mockRes);
   } catch (error) {
     console.error("Error testing algorithm:", error);
     return res.status(500).json({ success: false, error: error.message });

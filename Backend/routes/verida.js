@@ -1,508 +1,378 @@
-const express = require('express');
-const router = express.Router();
 const axios = require('axios');
-const { calculateVeridaScore } = require('../Services/veridaService');
-const User = require('../models/User');
-const scoreService = require('../Services/scoreService');
-const veridaService = require('../Services/veridaService');
+const dotenv = require('dotenv');
 
-// Get Verida auth URL
-router.get('/auth/url', async (req, res) => {
-  console.log(`\n🔐 GENERATING VERIDA AUTH URL 🔐`);
-  console.log(`================================`);
-  
-  try {
-    console.log(`🔍 Defining required scopes...`);
-    // Define scopes needed for Telegram data
-    const scopesList = [
-      'api:ds-query',
-      'api:search-universal',
-      'ds:social-email',
-      'api:connections-profiles',
-      'api:connections-status',
-      'api:db-query',
-      'api:ds-get-by-id',
-      'api:db-get-by-id',
-      'api:ds-update',
-      'api:search-ds',
-      'api:search-chat-threads',
-      'ds:r:social-chat-group',
-      'ds:r:social-chat-message'
-    ];
-    console.log(`✅ Defined ${scopesList.length} scopes`);
-    
-    // IMPORTANT: Set redirectUrl to our backend callback endpoint, not the frontend directly
-    const backendUrl = process.env.API_BASE_URL || 'http://localhost:5000';
-    const redirectUrl = `${backendUrl}/api/verida/auth/callback`;
-    // Using the same appDID as in the example project
-    const appDID = 'did:vda:mainnet:0x87AE6A302aBf187298FC1Fa02A48cFD9EAd2818D';
-    
-    console.log(`🔄 Redirect URL: ${redirectUrl}`);
-    console.log(`🆔 App DID: ${appDID}`);
-    
-    // Construct URL with multiple scope parameters - HARDCODED format
-    let authUrl = 'https://app.verida.ai/auth?';
-    
-    // Add each scope individually
-    scopesList.forEach(scope => {
-      authUrl += `scopes=${encodeURIComponent(scope)}&`;
-    });
-    
-    // Add redirect URL and appDID
-    authUrl += `redirectUrl=${encodeURIComponent(redirectUrl)}&appDID=${encodeURIComponent(appDID)}`;
-    
-    console.log(`\n🔑 GENERATED AUTH URL 🔑`);
-    console.log(`========================`);
-    console.log(authUrl);
-    console.log(`========================\n`);
-    
-    return res.json({ 
-      success: true, 
-      authUrl 
-    });
-  } catch (error) {
-    console.error(`❌ Error generating auth URL: ${error.message}`);
-    console.error(`================================\n`);
-    
-    return res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
-  }
-});
+dotenv.config();
 
-// Auth callback route
-router.get('/auth/callback', async (req, res) => {
-  console.log(`\n🔍 RECEIVED VERIDA CALLBACK 🔍`);
-  console.log(`=============================`);
+// Get the Verida network from environment variables
+const VERIDA_NETWORK = process.env.VERIDA_NETWORK || 'testnet';
+console.log(`Using Verida network: ${VERIDA_NETWORK}`);
+
+// Define the API endpoint from environment variables
+const VERIDA_API_BASE_URL = process.env.API_ENDPOINT || "https://api.verida.ai/api/rest/v1";
+console.log(`Using Verida API endpoint: ${VERIDA_API_BASE_URL}`);
+
+// Helper function for base64 encoding
+function btoa(str) {
+  return Buffer.from(str).toString('base64');
+}
+
+// Define schema URLs and their encoded versions
+const GROUP_SCHEMA = 'https://common.schemas.verida.io/social/chat/group/v0.1.0/schema.json';
+const MESSAGE_SCHEMA = 'https://common.schemas.verida.io/social/chat/message/v0.1.0/schema.json';
+const GROUP_SCHEMA_ENCODED = btoa(GROUP_SCHEMA);
+const MESSAGE_SCHEMA_ENCODED = btoa(MESSAGE_SCHEMA);
+
+// Keywords to check for "Engage Bonus"
+const ENGAGE_KEYWORDS = ['cluster', 'protocol', 'ai'];
+
+// Helper function to test multiple Verida API endpoints
+async function testVeridaEndpoints(authToken) {
+  const endpoints = [
+    '/api/profile',
+    '/api/user/info',
+    '/v1/user',
+    '/user',
+    '/profile'
+  ];
   
-  console.log(`🌐 Full URL: ${req.protocol}://${req.get('host')}${req.originalUrl}`);
-  console.log(`📝 Query parameters:`, req.query);
+  console.log('Testing Verida endpoints with token:', authToken.substring(0, 10) + '...');
   
-  try {
-    console.log(`🔑 Extracting auth token from request...`);
-    
-    // Extract token from request (might be auth_token or token)
-    let authToken = req.query.auth_token || req.query.token;
-    let did = null;
-    
-    // Log token format before parsing
-    if (authToken) {
-      if (typeof authToken === 'string') {
-        console.log(`🔑 Raw token type: string, length: ${authToken.length}`);
-        console.log(`🔑 Token starts with: ${authToken.substring(0, 30)}...`);
-        
-        // Check if it's a JSON string
-        if (authToken.startsWith('{')) {
-          console.log(`🔑 Token appears to be JSON format`);
-          try {
-            const tokenObj = JSON.parse(authToken);
-            if (tokenObj.token && tokenObj.token.did) {
-              did = tokenObj.token.did;
-              authToken = tokenObj.token._id || tokenObj.token;
-            }
-          } catch (e) {
-            console.error(`❌ Error parsing JSON token: ${e.message}`);
-          }
-        }
-      } else {
-        console.log(`🔑 Raw token type: ${typeof authToken}`);
+  for (const endpoint of endpoints) {
+    try {
+      const response = await axios({
+        method: 'GET',
+        url: `${VERIDA_API_BASE_URL}${endpoint}`,
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 5000
+      });
+      
+      console.log(`✅ Endpoint ${endpoint} succeeded:`, response.status);
+      console.log('Response data keys:', Object.keys(response.data || {}));
+      
+      if (response.data?.did) {
+        console.log('DID found in response:', response.data.did);
+        return response.data.did;
       }
+    } catch (error) {
+      console.log(`❌ Endpoint ${endpoint} failed:`, error.message);
+      console.log('Status:', error.response?.status);
     }
+  }
+  return null;
+}
+
+// Helper function to check for keywords in text content
+function checkForKeywords(text, keywordMatches) {
+  if (!text) return;
+  
+  const normalizedText = text.toLowerCase();
+  
+  ENGAGE_KEYWORDS.forEach(keyword => {
+    // Match whole words, case insensitive
+    let searchPos = 0;
+    const lowerKeyword = keyword.toLowerCase();
     
-    // If DID is not extracted yet, try to get it from the service
-    if (authToken && !did) {
+    while (true) {
+      const foundPos = normalizedText.indexOf(lowerKeyword, searchPos);
+      if (foundPos === -1) break;
+      
+      // Check if it's a whole word or hashtag match
+      const isWordStart = foundPos === 0 || 
+        !normalizedText[foundPos-1].match(/[a-z0-9]/) || 
+        normalizedText[foundPos-1] === '#';
+        
+      const isWordEnd = foundPos + lowerKeyword.length >= normalizedText.length || 
+        !normalizedText[foundPos + lowerKeyword.length].match(/[a-z0-9]/);
+      
+      if (isWordStart && isWordEnd) {
+        keywordMatches.keywords[keyword]++;
+        keywordMatches.totalCount++;
+        console.log(`Keyword match: '${keyword}' at position ${foundPos} in text: "${text.substring(Math.max(0, foundPos-10), Math.min(text.length, foundPos+keyword.length+10))}..."`);
+        break; // Count each keyword only once per text
+      }
+      
+      searchPos = foundPos + 1;
+    }
+  });
+}
+
+// Verida service for querying vault data
+const veridaService = {
+  // Get user DID using the auth token
+  getUserDID: async (authToken) => {
+    try {
+      if (!authToken) {
+        throw new Error('Auth token is required to fetch user DID');
+      }
+
+      console.log('Fetching user DID with auth token:', authToken.substring(0, 10) + '...');
+      
+      // Format auth header correctly
+      const authHeader = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
+      
+      // Try to get user profile info 
       try {
-        did = await veridaService.getUserDID(authToken);
-        console.log(`✅ Retrieved DID from auth token: ${did}`);
-      } catch (error) {
-        console.error(`❌ Error getting DID from token: ${error.message}`);
-      }
-    }
-    
-    // If we have no auth token, redirect to frontend with error
-    if (!authToken) {
-      console.error('❌ No auth token found in request');
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return res.redirect(`${frontendUrl}/verida-error?error=No_auth_token`);
-    }
-    
-    // Get privyId from query or session
-    const privyId = req.query.privyId || req.query.userId || req.session?.privyId;
-    
-    if (!privyId) {
-      console.error('❌ No privyId found in request');
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      return res.redirect(`${frontendUrl}/verida-error?error=No_privyId&did=${did || 'unknown'}&authToken=${authToken}`);
-    }
-    
-    // Update user with Verida info
-    const user = await User.findOne({ privyId });
-    
-    if (user) {
-      user.veridaConnected = true;
-      user.veridaUserId = did;
-      await user.save();
-      
-      console.log(`✅ Updated user ${privyId} with Verida DID: ${did}`);
-      
-      // Get Telegram data from Verida
-      try {
-        const telegramData = await veridaService.getTelegramData(did, authToken);
-        console.log(`✅ Retrieved Telegram data for DID: ${did}`);
+        const profileResponse = await axios({
+          method: 'GET',
+          url: `${VERIDA_API_BASE_URL.replace('/api/rest/v1', '')}/api/profile`,
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json'
+          },
+          timeout: 5000
+        });
         
-        // Update user's score with Telegram data
-        let score = await Score.findOne({ privyId });
-        
-        if (!score) {
-          score = new Score({
-            privyId,
-            username: user.username,
-            telegramScore: 0
-          });
+        if (profileResponse.data?.did) {
+          console.log('Retrieved DID from profile:', profileResponse.data.did);
+          return profileResponse.data.did;
         }
-        
-        // Calculate Telegram score
-        const telegramScore = calculateFOMOscore(telegramData);
-        score.telegramScore = telegramScore;
-        
-        // Recalculate total score
-        const walletTotal = score.wallets?.reduce((acc, w) => acc + (w.score || 0), 0) || 0;
-        score.totalScore = (score.twitterScore || 0) + walletTotal + telegramScore;
-        
-        await score.save();
-        console.log(`✅ Updated score for user ${privyId}: Telegram(${telegramScore}), Total(${score.totalScore})`);
-      } catch (error) {
-        console.error(`❌ Error processing Telegram data: ${error.message}`);
+      } catch (profileError) {
+        console.warn('Profile lookup failed:', profileError.message);
       }
-    } else {
-      console.error(`❌ User with privyId ${privyId} not found`);
-    }
-    
-    // Redirect to frontend with successful connection
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    return res.redirect(`${frontendUrl}/dashboard/${privyId}?veridaConnected=true&did=${did}`);
-    
-  } catch (error) {
-    console.error(`❌ Error in Verida auth callback: ${error.message}`);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    return res.redirect(`${frontendUrl}/verida-error?error=${encodeURIComponent(error.message)}`);
-  }
-});
 
-// Get Telegram groups data
-router.get('/telegram/groups/:userId', async (req, res) => {
-  console.log(`\n📊 FETCHING TELEGRAM GROUPS 📊`);
-  console.log(`==============================`);
-  
-  try {
-    const { userId } = req.params;
-    console.log(`🆔 User ID: ${userId}`);
-    
-    if (!userId) {
-      console.error('❌ Missing user ID parameter');
-      return res.status(400).json({ success: false, error: 'User ID is required' });
-    }
-    
-    console.log(`🔍 Fetching Telegram groups for user: ${userId}`);
-    const groups = await veridaService.getTelegramGroups(userId);
-    
-    console.log(`✅ Retrieved ${groups.length} groups`);
-    console.log(`==============================\n`);
-    
-    res.json({ 
-      success: true, 
-      count: groups.length,
-      groups
-    });
-  } catch (error) {
-    console.error('❌ Error fetching Telegram groups:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch Telegram groups' });
-  }
-});
-
-// Get Telegram messages data
-router.get('/telegram/messages/:userId', async (req, res) => {
-  console.log(`\n📝 FETCHING TELEGRAM MESSAGES 📝`);
-  console.log(`================================`);
-  
-  try {
-    const { userId } = req.params;
-    console.log(`🆔 User ID: ${userId}`);
-    
-    if (!userId) {
-      console.error('❌ Missing user ID parameter');
-      return res.status(400).json({ success: false, error: 'User ID is required' });
-    }
-    
-    console.log(`🔍 Fetching Telegram messages for user: ${userId}`);
-    const messages = await veridaService.getTelegramMessages(userId);
-    
-    console.log(`✅ Retrieved ${messages.length} messages`);
-    console.log(`================================\n`);
-    
-    res.json({ 
-      success: true, 
-      count: messages.length,
-      messages
-    });
-  } catch (error) {
-    console.error('❌ Error fetching Telegram messages:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch Telegram messages' });
-  }
-});
-
-// Update user's Verida status
-router.post('/update-status', async (req, res) => {
-  console.log(`\n📝 VERIDA STATUS UPDATE 📝`);
-  console.log(`==========================`);
-  
-  try {
-    const { privyId, veridaConnected = true, veridaUserId, score, walletAddresses } = req.body;
-    
-    console.log(`📥 Received request to update Verida status:`);
-    console.log(`👤 User ID: ${privyId}`);
-    console.log(`🔌 Verida Connected: ${veridaConnected}`);
-    console.log(`🔑 Verida User ID: ${veridaUserId}`);
-    console.log(`📊 Score Provided: ${score !== undefined ? score : 'No'}`);
-    console.log(`💼 Wallet Addresses: ${walletAddresses ? walletAddresses.length : 0} provided`);
-    
-    if (!privyId) {
-      throw new Error('User ID (privyId) is required');
-    }
-    
-    if (!veridaUserId && veridaConnected) {
-      throw new Error('Verida User ID is required when setting connected status to true');
-    }
-    
-    // Update the user's Verida status
-    console.log(`🔄 Updating Verida status in database...`);
-    const updateResult = await scoreService.updateVeridaStatus({
-      privyId,
-      veridaConnected,
-      veridaUserId,
-      walletAddresses
-    });
-    
-    if (!updateResult.success) {
-      throw new Error(updateResult.error || 'Failed to update Verida status');
-    }
-    
-    // If score is provided, update it directly
-    let scoreResult = null;
-    if (score !== undefined) {
-      console.log(`📊 Updating score directly with provided value: ${score}`);
-      
-      // Find the user to update
-      const user = await User.findOne({ privyId });
-      
-      if (!user) {
-        throw new Error('User not found');
+      // As a fallback, use the default DID from .env if available
+      if (process.env.DEFAULT_DID) {
+        console.warn('Using DEFAULT_DID as fallback - not ideal for production');
+        return process.env.DEFAULT_DID;
       }
       
-      // Ensure scoreDetails object exists
-      if (!user.scoreDetails) {
-        user.scoreDetails = {};
+      throw new Error('Could not determine user DID');
+    } catch (error) {
+      console.error('Error determining DID:', error.message || error);
+      throw error;
+    }
+  },
+
+  // Get Telegram data (groups and messages) from Verida vault
+  getTelegramData: async (did, authToken) => {
+    try {
+      if (!authToken) {
+        throw new Error('Auth token is required to query Verida vault');
       }
       
-      // Update the score
-      user.scoreDetails.veridaScore = score;
+      console.log('Querying Verida with:', { did, authToken: authToken.substring(0, 10) + '...' });
       
-      // Also update total score
-      const twitterScore = user.scoreDetails.twitterScore || 0;
-      const walletScore = user.scoreDetails.walletScore || 0;
-      user.totalScore = twitterScore + walletScore + score;
+      // Format auth header correctly
+      const authHeader = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
       
-      await user.save();
-      console.log(`✅ Score updated directly: ${score}`);
-      
-      scoreResult = {
-        success: true,
-        score: score
+      // Initialize counters and data stores
+      let groups = 0;
+      let messages = 0;
+      let groupItems = [];
+      let messageItems = [];
+      let keywordMatches = {
+        totalCount: 0,
+        keywords: {}
       };
-    } else if (veridaConnected && veridaUserId) {
-      // If score not provided but user is connected, calculate it
-      console.log(`🧮 No score provided, calculating Verida score...`);
-      scoreResult = await scoreService.calculateVeridaScore(privyId);
       
-      if (scoreResult.success) {
-        console.log(`✅ Score calculated: ${scoreResult.score}`);
-      } else {
-        console.warn(`⚠️ Failed to calculate score: ${scoreResult.error}`);
-      }
-    }
-    
-    console.log(`✅ Verida status updated successfully`);
-    console.log(`==========================\n`);
-    
-    return res.json({
-      success: true,
-      scoreUpdated: scoreResult ? scoreResult.success : false,
-      score: scoreResult ? scoreResult.score : undefined
-    });
-  } catch (error) {
-    console.error(`❌ Error updating Verida status: ${error.message}`);
-    console.error(`==========================\n`);
-    
-    return res.status(400).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Calculate Verida score
-router.post('/calculate-score', async (req, res) => {
-  console.log(`\n📊 CALCULATING VERIDA SCORE 📊`);
-  console.log(`=============================`);
-  
-  try {
-    const { privyId } = req.body;
-    console.log(`📝 Request data:`, req.body);
-    
-    if (!privyId) {
-      console.error('❌ Missing privyId in calculate-score request');
-      return res.status(400).json({ success: false, error: 'Missing required field: privyId' });
-    }
-    
-    console.log(`🔍 Calculating Verida score for user with privyId: ${privyId}`);
-    const scoreResult = await scoreService.calculateVeridaScore(privyId);
-    
-    if (!scoreResult.success) {
-      console.error('❌ Score calculation failed:', scoreResult.error);
-      const status = scoreResult.error === 'User not found' ? 404 : 500;
-      return res.status(status).json(scoreResult);
-    }
-    
-    console.log(`✅ Score calculated successfully: ${scoreResult.score}`);
-    console.log(`=============================\n`);
-    
-    res.json(scoreResult);
-  } catch (error) {
-    console.error('❌ Error calculating Verida score:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to calculate Verida score' });
-  }
-});
-
-// Test route for debugging Verida integration
-router.get('/debug', async (req, res) => {
-  console.log(`\n🔧 VERIDA DEBUG ENDPOINT 🔧`);
-  console.log(`==========================`);
-  
-  try {
-    // Check if we have any stored tokens
-    const tokenCount = Object.keys(global.userTokens || {}).length;
-    console.log(`📊 Stored token count: ${tokenCount}`);
-    
-    // Get list of Verida users from the database
-    const veridaUsers = await User.find({ veridaConnected: true }).select('_id privyId veridaConnected veridaUserId totalScore scoreDetails');
-    console.log(`📊 Verida connected users in database: ${veridaUsers.length}`);
-    
-    // Generate an auth URL for testing
-    const testAuthUrl = await veridaService.generateAuthUrl();
-    
-    // Return debug information
-    return res.json({
-      success: true,
-      tokenCount,
-      storedTokenUsers: Object.keys(global.userTokens || {}),
-      databaseUsers: veridaUsers,
-      testAuthUrl
-    });
-  } catch (error) {
-    console.error(`❌ Error in debug endpoint: ${error.message}`);
-    console.error(`==========================\n`);
-    
-    return res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Test route to check data for a specific user
-router.get('/debug/:userId', async (req, res) => {
-  console.log(`\n🔍 CHECKING USER DATA 🔍`);
-  console.log(`======================`);
-  
-  try {
-    const { userId } = req.params;
-    console.log(`👤 Checking data for user: ${userId}`);
-    
-    // Check if we have a token for this user
-    const hasToken = (global.userTokens || {})[userId] !== undefined;
-    console.log(`🔑 Token found: ${hasToken ? 'Yes' : 'No'}`);
-    
-    // Find user in database
-    const user = await User.findOne({ 
-      $or: [
-        { privyId: userId },
-        { veridaUserId: userId }
-      ]
-    }).select('_id privyId veridaConnected veridaUserId totalScore scoreDetails');
-    
-    console.log(`🗄️ User found in database: ${user ? 'Yes' : 'No'}`);
-    
-    // Try to get Telegram data if we have a token
-    let groups = [];
-    let messages = [];
-    let score = null;
-    
-    if (hasToken) {
-      try {
-        console.log(`📥 Fetching Telegram groups...`);
-        groups = await veridaService.getTelegramGroups(userId);
-        console.log(`✅ Retrieved ${groups.length} groups`);
-      } catch (groupError) {
-        console.error(`❌ Error fetching groups: ${groupError.message}`);
-      }
+      // Initialize keyword counts
+      ENGAGE_KEYWORDS.forEach(keyword => {
+        keywordMatches.keywords[keyword] = 0;
+      });
       
+      // Fetch Telegram groups
       try {
-        console.log(`📥 Fetching Telegram messages...`);
-        messages = await veridaService.getTelegramMessages(userId);
-        console.log(`✅ Retrieved ${messages.length} messages`);
-      } catch (messageError) {
-        console.error(`❌ Error fetching messages: ${messageError.message}`);
-      }
-      
-      try {
-        console.log(`🧮 Calculating score...`);
-        const scoreResult = await veridaService.calculateVeridaScore(userId);
-        if (scoreResult.success) {
-          score = scoreResult;
-          console.log(`✅ Score calculated: ${scoreResult.score}`);
+        console.log('Fetching Telegram groups...');
+        const groupResponse = await axios({
+          method: 'POST',
+          url: `${VERIDA_API_BASE_URL}/ds/query/${GROUP_SCHEMA_ENCODED}`,
+          data: {
+            query: {
+              sourceApplication: "https://telegram.com"
+            },
+            options: {
+              sort: [{ _id: "desc" }],
+              limit: 100000
+            }
+          },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': authHeader
+          },
+          timeout: 10000
+        });
+        
+        // Process group data
+        if (groupResponse.data?.items && Array.isArray(groupResponse.data.items)) {
+          groupItems = groupResponse.data.items;
+          groups = groupItems.length;
+          console.log(`Found ${groups} Telegram groups`);
+          
+          // Check for keywords in group content
+          groupItems.forEach(group => {
+            const groupText = [
+              group.name || '', 
+              group.description || '',
+              group.subject || ''
+            ].join(' ');
+            
+            if (groupText.trim()) {
+              checkForKeywords(groupText, keywordMatches);
+            }
+          });
+        } else {
+          console.log('No group items found in response');
+          console.log('Response data keys:', Object.keys(groupResponse.data || {}));
         }
-      } catch (scoreError) {
-        console.error(`❌ Error calculating score: ${scoreError.message}`);
+      } catch (groupError) {
+        console.error('Error fetching Telegram groups:', groupError.message);
       }
+      
+      // Fetch Telegram messages
+      try {
+        console.log('Fetching Telegram messages...');
+        const messageResponse = await axios({
+          method: 'POST',
+          url: `${VERIDA_API_BASE_URL}/ds/query/${MESSAGE_SCHEMA_ENCODED}`,
+          data: {
+            query: {
+              sourceApplication: "https://telegram.com"
+            },
+            options: {
+              sort: [{ _id: "desc" }],
+              limit: 100000
+            }
+          },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': authHeader
+          },
+          timeout: 10000
+        });
+        
+        // Process message data
+        if (messageResponse.data?.items && Array.isArray(messageResponse.data.items)) {
+          messageItems = messageResponse.data.items;
+          messages = messageItems.length;
+          console.log(`Found ${messages} Telegram messages`);
+          
+          // Check for keywords in message content
+          messageItems.forEach(message => {
+            // Extract text content from message
+            let allTextFields = [];
+            
+            // Add all string fields from the message object
+            Object.entries(message).forEach(([key, value]) => {
+              if (typeof value === 'string') {
+                allTextFields.push(value);
+              } else if (typeof value === 'object' && value !== null) {
+                // Check nested objects (like "body" or "data")
+                Object.values(value).forEach(nestedValue => {
+                  if (typeof nestedValue === 'string') {
+                    allTextFields.push(nestedValue);
+                  }
+                });
+              }
+            });
+            
+            const messageText = allTextFields.join(' ');
+            
+            if (messageText.trim()) {
+              checkForKeywords(messageText, keywordMatches);
+            }
+          });
+        } else {
+          console.log('No message items found in response');
+          console.log('Response data keys:', Object.keys(messageResponse.data || {}));
+        }
+      } catch (messageError) {
+        console.error('Error fetching Telegram messages:', messageError.message);
+      }
+      
+      // Return all data
+      return {
+        groups,
+        messages,
+        groupItems,
+        messageItems,
+        keywordMatches
+      };
+    } catch (error) {
+      console.error('Error querying Verida vault:', error.message || error);
+      throw error;
     }
-    
-    // Return all debug information
-    return res.json({
-      success: true,
-      userId,
-      hasToken,
-      user: user || null,
-      dataStats: {
-        groupCount: groups.length,
-        messageCount: messages.length,
-        hasScore: score !== null
-      },
-      sampleData: {
-        groups: groups.slice(0, 1),
-        messages: messages.slice(0, 1)
-      },
-      score
-    });
-  } catch (error) {
-    console.error(`❌ Error checking user data: ${error.message}`);
-    console.error(`======================\n`);
-    
-    return res.status(500).json({
-      success: false,
-      error: error.message
-    });
+  },
+  
+  // Get Telegram groups specifically
+  getTelegramGroups: async (authToken) => {
+    try {
+      if (!authToken) {
+        throw new Error('Auth token is required to query Verida vault');
+      }
+      
+      // Format auth header correctly
+      const authHeader = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
+      
+      console.log('Fetching Telegram groups...');
+      const response = await axios({
+        method: 'POST',
+        url: `${VERIDA_API_BASE_URL}/ds/query/${GROUP_SCHEMA_ENCODED}`,
+        data: {
+          query: {
+            sourceApplication: "https://telegram.com"
+          },
+          options: {
+            sort: [{ _id: "desc" }],
+            limit: 100000
+          }
+        },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader
+        },
+        timeout: 10000
+      });
+      
+      // Extract and return groups
+      const groups = response.data && response.data.items ? response.data.items : [];
+      return groups;
+    } catch (error) {
+      console.error('Error fetching Telegram groups:', error.message || error);
+      throw error;
+    }
+  },
+  
+  // Get Telegram messages specifically
+  getTelegramMessages: async (authToken) => {
+    try {
+      if (!authToken) {
+        throw new Error('Auth token is required to query Verida vault');
+      }
+      
+      // Format auth header correctly
+      const authHeader = authToken.startsWith('Bearer ') ? authToken : `Bearer ${authToken}`;
+      
+      console.log('Fetching Telegram messages...');
+      const response = await axios({
+        method: 'POST',
+        url: `${VERIDA_API_BASE_URL}/ds/query/${MESSAGE_SCHEMA_ENCODED}`,
+        data: {
+          query: {
+            sourceApplication: "https://telegram.com"
+          },
+          options: {
+            sort: [{ _id: "desc" }],
+            limit: 100000
+          }
+        },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader
+        },
+        timeout: 10000
+      });
+      
+      // Extract and return messages
+      const messages = response.data && response.data.items ? response.data.items : [];
+      return messages;
+    } catch (error) {
+      console.error('Error fetching Telegram messages:', error.message || error);
+      throw error;
+    }
   }
-});
+};
 
-module.exports = router; 
+module.exports = veridaService;
