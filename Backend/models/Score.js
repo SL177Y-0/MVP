@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const ScoreSchema = new mongoose.Schema({
     privyId: { type: String, required: true, unique: true },
     username: { type: String, default: null },
-    email: { type: String, required: true, unique: true }, 
+    email: { type: String, default: null }, 
     twitterScore: { type: Number, default: 0 },
     telegramScore: { type: Number, default: 0 },  
     totalScore: { type: Number, default: 0 },  

@@ -73,11 +73,13 @@ export const getScore = async (privyId: string, username: string, walletAddress:
   }
   
   try {
+    console.log(`Fetching score for user ${privyId} with Twitter ${username} and wallet ${walletAddress || 'none'}`);
     const response = await api.get(`/api/score/get-score/${privyId}/${username}/${walletAddress || 'null'}`);
     return response.data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to get score:', error);
-    throw error;
+    const errorMessage = error.response?.data?.error || error.message || 'Failed to fetch score';
+    throw new Error(errorMessage);
   }
 };
 
@@ -87,11 +89,13 @@ export const postScore = async (data: any) => {
   if (validationError) throw new Error(validationError);
   
   try {
+    console.log('Posting score data:', data);
     const response = await api.post('/api/score/get-score', data);
     return response.data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to post score:', error);
-    throw error;
+    const errorMessage = error.response?.data?.error || error.message || 'Failed to update score';
+    throw new Error(errorMessage);
   }
 };
 
@@ -103,11 +107,13 @@ export const connectVerida = async (userDid: string, authToken: string) => {
   if (!authToken) throw new Error('Auth token is required');
   
   try {
+    console.log(`Connecting Verida for user DID ${userDid}`);
     const response = await api.post('/api/score/get-score', { userDid, authToken });
     return response.data;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to connect Verida:', error);
-    throw error;
+    const errorMessage = error.response?.data?.error || error.message || 'Failed to connect Verida';
+    throw new Error(errorMessage);
   }
 };
 

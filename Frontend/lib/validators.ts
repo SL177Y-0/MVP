@@ -92,17 +92,22 @@ export const validateEmail = (email: string | null | undefined): string | null =
 };
 
 /**
- * Validates Privy ID
- * @param privyId Privy ID to validate
+ * Validates user identifier (privyId, userId, or userDid)
+ * @param userId Any user identifier to validate
  * @returns Error message if invalid, null if valid
  */
-export const validatePrivyId = (privyId: string | null | undefined): string | null => {
-  if (!privyId) {
+export const validatePrivyId = (userId: string | null | undefined): string | null => {
+  if (!userId) {
     return 'User ID is required';
   }
   
-  if (typeof privyId !== 'string') {
+  if (typeof userId !== 'string') {
     return 'User ID must be a string';
+  }
+  
+  // DID format check if it looks like a DID
+  if (userId.startsWith('did:') && userId.split(':').length < 3) {
+    return 'Invalid DID format';
   }
   
   return null;

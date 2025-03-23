@@ -7,14 +7,16 @@ dotenv.config();
 
 // Get the Verida network from environment variables
 const VERIDA_NETWORK = process.env.VERIDA_NETWORK || 'testnet';
-const VERIDA_API_ENDPOINT = process.env.VERIDA_API_ENDPOINT || "https://api.verida.ai/api/rest/v1";
+const VERIDA_API_ENDPOINT = process.env.VERIDA_API_ENDPOINT || process.env.VERIDA_API_BASE_URL || "https://api.verida.ai/api/rest/v1";
 const VERIDA_APP_DID = process.env.VERIDA_APP_DID || "did:vda:mainnet:0x87AE6A302aBf187298FC1Fa02A48cFD9EAd2818D";
-const VERIDA_AUTH_REDIRECT_URL = process.env.VERIDA_AUTH_REDIRECT_URL || "http://localhost:5000/api/verida/auth-callback";
+const VERIDA_AUTH_REDIRECT_URL = process.env.VERIDA_AUTH_REDIRECT_URL || process.env.VERIDA_REDIRECT_URI || "http://localhost:5000/api/verida/auth-callback";
+const VERIDA_AUTH_URL = process.env.VERIDA_AUTH_URL || "https://app.verida.ai/auth";
 
 logger.info('Verida Configuration', {
   network: VERIDA_NETWORK,
   endpoint: VERIDA_API_ENDPOINT,
-  appDid: VERIDA_APP_DID
+  appDid: VERIDA_APP_DID,
+  authUrl: VERIDA_AUTH_URL
 });
 
 // The correct encoded schemas

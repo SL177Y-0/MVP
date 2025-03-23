@@ -19,8 +19,35 @@ function Verida({ onConnectionChange }: VeridaProps) {
   const [errorToast, setErrorToast] = useState({ visible: false, message: '' });
   const [userId, setUserId] = useState<string | null>(null);
   const [authTimeoutExpired, setAuthTimeoutExpired] = useState(false);
+  const [configValid, setConfigValid] = useState(true);
+  
+  // Environment variables
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+  const veridaNetwork = import.meta.env.VITE_VERIDA_NETWORK || 'mainnet';
+  const veridaAppName = import.meta.env.VITE_VERIDA_APP_NAME || 'fomoscore';
   const authTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Validate configuration on mount
+  useEffect(() => {
+    if (!apiBaseUrl) {
+      console.error('Missing VITE_API_BASE_URL environment variable');
+      setError('Missing API configuration. Please contact support.');
+      setConfigValid(false);
+    }
+    
+    if (!veridaNetwork || !veridaAppName) {
+      console.error('Missing Verida configuration variables');
+      setError('Missing Verida configuration. Please contact support.');
+      setConfigValid(false);
+    }
+    
+    // Log configuration for debugging
+    console.log('Verida Configuration:', {
+      apiBaseUrl,
+      veridaNetwork,
+      veridaAppName
+    });
+  }, []);
   
   // Clear any existing timeouts when component unmounts
   useEffect(() => {
@@ -108,6 +135,10 @@ function Verida({ onConnectionChange }: VeridaProps) {
 
   const connectWithVerida = async () => {
     try {
+      if (!configValid) {
+        throw new Error('Invalid configuration. Please contact support.');
+      }
+      
       setLoading(true);
       setError(null);
       setAuthTimeoutExpired(false);
@@ -127,7 +158,12 @@ function Verida({ onConnectionChange }: VeridaProps) {
       }, 120000); // 2 minutes
       
       // Get the auth URL from our backend
-      const response = await axios.get(`${apiBaseUrl}/api/verida/auth-url`);
+      const response = await axios.get(`${apiBaseUrl}/api/verida/auth-url`, {
+        params: {
+          network: veridaNetwork,
+          appName: veridaAppName
+        }
+      });
       
       if (!response.data.authUrl) {
         throw new Error('Failed to generate Verida authentication URL');

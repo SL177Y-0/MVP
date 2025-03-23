@@ -23,6 +23,8 @@ import {
   Check,
   Image,
   Link,
+  AlertTriangle,
+  Loader
 } from "lucide-react"
 import html2canvas from "html2canvas"
 
@@ -50,10 +52,43 @@ export default function ClusterDashboard() {
   const notificationRef = useRef(null)
   const bellRef = useRef(null)
   const [preparingDownload, setPreparingDownload] = useState(false)
-  const [networkNodes, setNetworkNodes] = useState([])
-  const [networkLinks, setNetworkLinks] = useState([])
-  const networkCanvasRef = useRef(null)
+  const [networkNodes, setNetworkNodes] = useState<any[]>([])
+  const [networkLinks, setNetworkLinks] = useState<any[]>([])
+  const networkCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  
+  // Add loading and error states
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [leaderboardData, setLeaderboardData] = useState([]);
+  
+  // Fetch leaderboard data
+  useEffect(() => {
+    const fetchLeaderboardData = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        
+        // Fetch data from API
+        const response = await fetch(`${apiBaseUrl}/api/leaderboard?page=${currentPage}`);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch leaderboard data: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        setLeaderboardData(data);
+      } catch (err: any) {
+        console.error('Error fetching leaderboard data:', err);
+        setError(err.message || 'Failed to load leaderboard data');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchLeaderboardData();
+  }, [apiBaseUrl, currentPage]);
+  
   // Generate network data
   useEffect(() => {
     // Generate random nodes
@@ -254,41 +289,31 @@ export default function ClusterDashboard() {
         ctx.lineWidth = link.strength * 5
         ctx.globalAlpha = 0.2
         ctx.stroke()
-
-        ctx.globalAlpha = 1.0
-      })
-
-      // Draw nodes
-      networkNodes.forEach((node) => {
-        // Draw glow effect for nodes
-        ctx.beginPath()
-        ctx.arc(node.x, node.y, node.radius * 1.5, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(${node.id === "user" ? "74, 222, 128" : "255, 255, 255"}, 0.2)`
-        ctx.fill()
-
-        // Draw node
-        ctx.beginPath()
-        ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
-        ctx.fillStyle = node.color
-        ctx.fill()
-
-        // Add border to nodes
-        ctx.beginPath()
-        ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2)
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"
-        ctx.lineWidth = 1.5
-        ctx.stroke()
-      })
-
-      requestAnimationFrame(animate)
+      }
     }
+  }, [networkNodes, networkLinks]);
 
-    const animationId = requestAnimationFrame(animate)
-
-    return () => {
-      cancelAnimationFrame(animationId)
-    }
-  }, [networkNodes, networkLinks])
+  // Add loading spinner component
+  const LoadingSpinner = () => (
+    <div className="flex flex-col items-center justify-center py-8">
+      <Loader className="animate-spin text-cyber-green h-8 w-8 mb-2" />
+      <p className="text-white/70">Loading leaderboard data...</p>
+    </div>
+  );
+  
+  // Add error message component
+  const ErrorMessage = ({ message }: { message: string }) => (
+    <div className="flex flex-col items-center justify-center py-8 text-red-400">
+      <AlertTriangle className="h-8 w-8 mb-2" />
+      <p>{message}</p>
+      <button 
+        className="mt-4 px-4 py-2 bg-gray-800 rounded-lg hover:bg-gray-700 text-white/80"
+        onClick={() => window.location.reload()}
+      >
+        Try Again
+      </button>
+    </div>
+  );
 
   // Close notifications when clicking outside
   useEffect(() => {

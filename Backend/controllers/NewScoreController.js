@@ -14,6 +14,7 @@ async function CollectData(req, res) {
       if (req.method === "POST") {
         if (!privyId && req.body.privyId) privyId = req.body.privyId;
         if (!username && req.body.userId) username = req.body.userId;
+        if (!username && req.body.twitterUsername) username = req.body.twitterUsername;
         if (!address && req.body.walletAddress) address = req.body.walletAddress;
       }
   
@@ -24,7 +25,7 @@ async function CollectData(req, res) {
       }
   
       if (!privyId) {
-        return res.status(400).json({ error: "Provide a Privy ID" });
+        return res.status(400).json({ error: "Provide a Privy ID, userDid, or userId for identification" });
       }
   
       // Extract Telegram-related data
@@ -69,11 +70,11 @@ async function CollectData(req, res) {
       const telegramGroups = telegramData.groups || [];
       const telegramMessages = telegramData.messages || [];
   
-      // Assume calculateScore is imported and defined correctly.
-      const scores = calculateScore(privyId, userData, walletData, telegramGroups, telegramMessages);
+      // Calculate score and save to database if needed
+      const scores = await calculateAndSaveScore(privyId, userData, walletData, telegramGroups, telegramMessages, email);
       console.log("🧮 Final Score Breakdown:", scores);
 
-       return res.json({ totalScore:scores.totalScore });
+      return res.json({ totalScore: scores.totalScore });
 
     } catch (error) {
       console.error("❌ Error calculating score:", error.message);
@@ -187,15 +188,14 @@ const titleRequirements = {
 
 /**
  * Calculate scores for each category based on user data
+ * @param {String} privyId - User's Privy ID
  * @param {Object} twitterData - Twitter API data
  * @param {Object} walletData - Wallet API data
- * @param {Object} telegramGroups - Telegram groups data
- * @param {Object} telegramMessages - Telegram messages data
+ * @param {Array} telegramGroups - Telegram groups data
+ * @param {Array} telegramMessages - Telegram messages data
  * @returns {Object} Scores for each category and total score
  */
-// Model imported once at top
-
-async function calculateScore({ privyId, twitterData, walletData, telegramGroups, telegramMessages }) {
+async function calculateScore(privyId, twitterData, walletData, telegramGroups, telegramMessages) {
   let socialScore = 0;
   let cryptoScore = 0;
   let nftScore = 0;
@@ -347,6 +347,104 @@ async function calculateScore({ privyId, twitterData, walletData, telegramGroups
   return result;
 }
 
+/**
+ * Calculate scores and save to database
+ */
+async function calculateAndSaveScore(privyId, userData, walletData, telegramGroups, telegramMessages, email) {
+  // First calculate the scores
+  const scores = await calculateScore(privyId, userData, walletData, telegramGroups, telegramMessages);
+  
+  // Save to database with retry logic
+  const MAX_RETRIES = 3;
+  let retryCount = 0;
+  let lastError = null;
+  
+  while (retryCount < MAX_RETRIES) {
+    try {
+      // Extract username from user data
+      const username = userData?.data?.user?.result?.screen_name || null;
+      
+      // Extract wallet address from wallet data if available
+      const walletAddress = walletData?.address || null;
+      
+      // Find or create user entry
+      let userEntry = null;
+      try {
+        userEntry = await Score.findOne({ privyId }).maxTimeMS(5000); // Add timeout to prevent long-running queries
+      } catch (findError) {
+        console.warn(`⚠️ Error finding score for ${privyId} (attempt ${retryCount + 1}): ${findError.message}`);
+        retryCount++;
+        lastError = findError;
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retrying
+        continue;
+      }
+      
+      if (!userEntry) {
+        // Create new user entry
+        userEntry = new Score({
+          privyId,
+          username: username || null,
+          email: email || null,
+          twitterScore: scores.socialScore || 0,
+          telegramScore: scores.telegramScore || 0,
+          totalScore: scores.totalScore || 0
+        });
+        
+        // Add wallet if available
+        if (walletAddress) {
+          userEntry.wallets = [{
+            walletAddress,
+            score: scores.cryptoScore + scores.nftScore || 0
+          }];
+        }
+      } else {
+        // Update existing user
+        if (username) userEntry.username = username;
+        if (email) userEntry.email = email;
+        
+        userEntry.twitterScore = scores.socialScore || userEntry.twitterScore || 0;
+        userEntry.telegramScore = scores.telegramScore || userEntry.telegramScore || 0;
+        userEntry.totalScore = scores.totalScore || 0;
+        
+        // Update wallet if available
+        if (walletAddress) {
+          const walletScore = scores.cryptoScore + scores.nftScore || 0;
+          const existingWalletIndex = userEntry.wallets.findIndex(w => w.walletAddress === walletAddress);
+          
+          if (existingWalletIndex >= 0) {
+            userEntry.wallets[existingWalletIndex].score = walletScore;
+          } else {
+            userEntry.wallets.push({ walletAddress, score: walletScore });
+          }
+        }
+      }
+      
+      // Save the updated user entry
+      try {
+        await userEntry.save();
+        console.log(`✅ Successfully saved score for ${privyId}: ${scores.totalScore}`);
+        break; // Exit retry loop on success
+      } catch (saveError) {
+        console.warn(`⚠️ Error saving score for ${privyId} (attempt ${retryCount + 1}): ${saveError.message}`);
+        retryCount++;
+        lastError = saveError;
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retrying
+      }
+    } catch (err) {
+      console.error(`❌ Error processing score for ${privyId} (attempt ${retryCount + 1}): ${err.message}`);
+      retryCount++;
+      lastError = err;
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retrying
+    }
+  }
+  
+  if (retryCount === MAX_RETRIES) {
+    console.error(`❌ Error saving score to DB after ${MAX_RETRIES} attempts: ${lastError.message}`);
+  }
+  
+  // Return calculated scores even if saving fails
+  return scores;
+}
 
 /**
  * Assign badges based on thresholds
@@ -462,33 +560,87 @@ function evaluateUser(twitterData, walletData, telegramGroups, telegramMessages)
 // const result = evaluateUser(twitterData, walletData, telegramGroups, telegramMessages);
 // console.log(result);
 
-// Add getTotalScore function
+/**
+ * Get total score for a user
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
 async function getTotalScore(req, res) {
   try {
-    const { privyId } = req.params;
+    // Extract all possible identifiers from request
+    const { privyId, userId, userDid } = req.params;
+    const walletAddress = req.query?.walletAddress;
     
-    if (!privyId) {
-      return res.status(400).json({ error: "Provide a valid Privy ID" });
+    // Determine which ID to use, in order of preference
+    const identifier = privyId || userId || userDid || walletAddress;
+    
+    if (!identifier) {
+      return res.status(400).json({ error: "User identification is required" });
     }
     
-    // Find the most recent score for this user
-    const score = await Score.findOne({ privyId }).sort({ createdAt: -1 });
+    console.log(`📊 Fetching total score for user with identifier: ${identifier}`);
     
-    if (!score) {
-      return res.status(404).json({ error: "No score found for this user" });
+    // Maximum retry attempts for database operations
+    const MAX_RETRIES = 3;
+    let retryCount = 0;
+    let lastError = null;
+    
+    while (retryCount < MAX_RETRIES) {
+      try {
+        // Check if we can find the user by any identifier
+        const userEntry = await Score.findOne({ 
+          $or: [
+            { privyId: identifier },
+            { userDid: identifier },
+            { userId: identifier },
+            { 'wallets.walletAddress': identifier }
+          ] 
+        }).maxTimeMS(5000); // Add timeout to prevent long-running queries
+        
+        if (!userEntry) {
+          console.log(`⚠️ No score found for user with identifier: ${identifier}`);
+          return res.json({ totalScore: 0, note: "No score found for this user" });
+        }
+        
+        console.log(`✅ Found score for user with identifier ${identifier}: ${userEntry.totalScore}`);
+        return res.json({ 
+          totalScore: userEntry.totalScore,
+          twitterScore: userEntry.twitterScore || 0, 
+          telegramScore: userEntry.telegramScore || 0,
+          wallets: userEntry.wallets || []
+        });
+      } catch (dbError) {
+        console.warn(`⚠️ Database error while fetching score (attempt ${retryCount + 1}): ${dbError.message}`);
+        retryCount++;
+        lastError = dbError;
+        
+        // Only wait between retries if we haven't exhausted all attempts
+        if (retryCount < MAX_RETRIES) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retrying
+        }
+      }
     }
     
-    return res.status(200).json({
-      success: true,
-      privyId,
-      totalScore: score.totalScore,
-      badges: score.badges,
-      title: score.title
+    // If we exhaust all retries, return a fallback response
+    console.error(`❌ Database error after ${MAX_RETRIES} attempts: ${lastError.message}`);
+    return res.json({ 
+      totalScore: 0, 
+      note: "Default score due to database error",
+      error: lastError.message
     });
+    
   } catch (error) {
-    console.error("Error getting total score:", error);
-    return res.status(500).json({ error: "Failed to retrieve total score" });
+    console.error("❌ Error fetching total score:", error.message);
+    return res.status(500).json({ error: "Server Error" });
   }
 }
 
-module.exports = { CollectData, getTotalScore };
+module.exports = { 
+  CollectData, 
+  calculateScore, 
+  calculateAndSaveScore,
+  assignBadges, 
+  assignTitleBasedOnBadges, 
+  evaluateUser, 
+  getTotalScore 
+};
