@@ -1,4 +1,3 @@
-
 import { useState, useRef, useEffect } from "react"
 import {
   ChevronDown,
@@ -667,11 +666,28 @@ export default function ClusterDashboard() {
       try {
         setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "processing" })
         const canvas = await html2canvas(scoreCardRef.current)
-        canvas.toBlob((blob) => {
-          const item = new ClipboardItem({ "image/png": blob })
-          navigator.clipboard.write([item])
-          setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "copied" })
-        })
+        
+        // Check if Clipboard API and ClipboardItem are supported
+        if (navigator.clipboard && window.ClipboardItem) {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const item = new ClipboardItem({ "image/png": blob })
+              navigator.clipboard.write([item])
+                .then(() => {
+                  setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "copied" })
+                })
+                .catch(err => {
+                  console.error("Error copying image:", err)
+                  // Fallback to download if copying fails
+                  downloadScoreCard()
+                })
+            }
+          })
+        } else {
+          // Fallback for browsers that don't support ClipboardItem
+          downloadScoreCard()
+          setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "downloaded" })
+        }
       } catch (err) {
         console.error("Error copying image:", err)
         setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "error" })

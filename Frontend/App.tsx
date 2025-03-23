@@ -1,4 +1,3 @@
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,6 +7,8 @@ import { ScoreProvider } from "./context/ScoreContext";
 import { WagmiProvider } from "wagmi";
 import { config } from "./config";
 import { AnimatePresence } from "framer-motion";
+import ErrorBoundary from "./components/ErrorBoundary";
+import SessionTimeoutManager from "./components/SessionTimeoutManager";
 import Analysis from './pages/Analysis'
 import Index from "./pages/Index";
 import StartPage from "./pages/StartPage";
@@ -21,39 +22,40 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <ScoreProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <AnimatePresence mode="wait">
-            <Routes>
-              <Route path="/" element={<StartPage />} />
-              <Route path="/index" element={<Index />} />
-              <Route path="/start" element={<StartPage />} />
-              <Route path="/connect/twitter" element={<TwitterConnectPage />} />
-              <Route path="/connect/telegram" element={<TelegramConnectPage />} />
-              <Route path="/connect/wallet" element={
-                
-               
-        <WagmiProvider config={config}>
-       
-  
-  <WalletConnectPage/>
- 
-</WagmiProvider>
-} />
-              <Route path="/scorecard" element={<ScorecardPage />} />
-              <Route path="/dashboard" element={<Analysis/>} />
-              <Route path="/not-found" element={<NotFound />} />
-              <Route path="*" element={<Navigate to="/not-found" replace />} />
-            </Routes>
-          </AnimatePresence>
-        </BrowserRouter>
-      </TooltipProvider>
-    </ScoreProvider>
-  </QueryClientProvider>
+  <ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <ScoreProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <SessionTimeoutManager 
+              timeoutDuration={60 * 60 * 1000} // 60 minutes 
+              warningDuration={5 * 60 * 1000}  // 5 minute warning
+            />
+            <AnimatePresence mode="wait">
+              <Routes>
+                <Route path="/" element={<StartPage />} />
+                <Route path="/index" element={<Index />} />
+                <Route path="/start" element={<StartPage />} />
+                <Route path="/connect/twitter" element={<TwitterConnectPage />} />
+                <Route path="/connect/telegram" element={<TelegramConnectPage />} />
+                <Route path="/connect/wallet" element={
+                  <WagmiProvider config={config}>
+                    <WalletConnectPage/>
+                  </WagmiProvider>
+                } />
+                <Route path="/scorecard" element={<ScorecardPage />} />
+                <Route path="/dashboard" element={<Analysis/>} />
+                <Route path="/not-found" element={<NotFound />} />
+                <Route path="*" element={<Navigate to="/not-found" replace />} />
+              </Routes>
+            </AnimatePresence>
+          </BrowserRouter>
+        </TooltipProvider>
+      </ScoreProvider>
+    </QueryClientProvider>
+  </ErrorBoundary>
 );
 
 export default App;

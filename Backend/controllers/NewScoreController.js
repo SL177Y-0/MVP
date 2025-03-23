@@ -462,4 +462,33 @@ function evaluateUser(twitterData, walletData, telegramGroups, telegramMessages)
 // const result = evaluateUser(twitterData, walletData, telegramGroups, telegramMessages);
 // console.log(result);
 
-module.exports = { CollectData };
+// Add getTotalScore function
+async function getTotalScore(req, res) {
+  try {
+    const { privyId } = req.params;
+    
+    if (!privyId) {
+      return res.status(400).json({ error: "Provide a valid Privy ID" });
+    }
+    
+    // Find the most recent score for this user
+    const score = await Score.findOne({ privyId }).sort({ createdAt: -1 });
+    
+    if (!score) {
+      return res.status(404).json({ error: "No score found for this user" });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      privyId,
+      totalScore: score.totalScore,
+      badges: score.badges,
+      title: score.title
+    });
+  } catch (error) {
+    console.error("Error getting total score:", error);
+    return res.status(500).json({ error: "Failed to retrieve total score" });
+  }
+}
+
+module.exports = { CollectData, getTotalScore };

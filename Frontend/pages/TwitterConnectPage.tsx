@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { auth, twitterProvider } from "../firebase";
-import { signInWithPopup, signOut } from "firebase/auth";
-import { usePrivy } from "@privy-io/react-auth";
+import { signInWithPopup, signOut, User } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Twitter } from "lucide-react";
@@ -12,6 +11,7 @@ import AnimatedCheckmark from "@/components/AnimatedCheckmark";
 import FloatingElements from "@/components/FloatingElements";
 import ScoreDisplay from "@/components/ScoreDisplay";
 import { useScore } from "@/context/ScoreContext";
+import { postScore, getScore } from "@/lib/api";
 
 const twitterTasks = [
   "Checking Crypto Twitter Presence",
@@ -19,8 +19,6 @@ const twitterTasks = [
   "Measuring Follower Quality & Growth",
   "Detecting Viral Impact Score",
 ];
-
-
 
 const TwitterConnectPage = () => {
   const navigate = useNavigate();
@@ -34,41 +32,41 @@ const TwitterConnectPage = () => {
   ]);
   const [completedScan, setCompletedScan] = useState(false);
 
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
+  const [error, setError] = useState<string | null>(null);
   const [targetScore, setTargetScore] = useState(0); // Dynamic score from backend
-const [score, setScore] = useState(0); // For animation
+  const [score, setScore] = useState(0); // For animation
 
-const loginWithTwit = async () => {
-  try {
-    const result = await signInWithPopup(auth, twitterProvider);
-    setUser(result.user);
-    setError(null);
+  // ✅ Login with Twitter and fetch score
+  const loginWithTwitter = async () => {
+    try {
+      const result = await signInWithPopup(auth, twitterProvider);
+      setUser(result.user);
+      setError(null);
 
-    // 🎯 Fetch Twitter score from backend
-    const response = await fetch(`${apiBaseUrl}/api/score/get-score`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        twitterUsername: result.user.displayName
-      })
-    });
+      // Store user info in localStorage for persistence
+      localStorage.setItem('twitterUser', JSON.stringify({
+        username: result.user.displayName,
+        id: result.user.uid
+      }));
 
-    const data = await response.json();
-    const total = Math.round(data?.totalScore || 0);
-
-    setTargetScore(total); // Set real score for animation
-  } catch (err) {
-    setError(err.message);
-  }
-};
-
-  // ✅ Use Privy (if needed)
-  const { authenticated, user: privyUser } = usePrivy();
+      // 🎯 Fetch Twitter score from backend using API client
+      try {
+        const data = await postScore({
+          twitterUsername: result.user.displayName
+        });
+        
+        const total = Math.round(data?.totalScore || 0);
+        setTargetScore(total); // Set real score for animation
+      } catch (error) {
+        console.error("Failed to fetch score:", error);
+        setTargetScore(3500); // Fallback score if API fails
+      }
+    } catch (error: any) {
+      setError(error.message);
+    }
+  };
 
   // ✅ Fetch score when user logs in
   useEffect(() => {
@@ -79,23 +77,15 @@ const loginWithTwit = async () => {
       setError(null);
 
       try {
-        const privyID = user?.email || "guest";
-        const username = user?.displayName || "unknown";
+        const privyID = user.email || "guest";
+        const username = user.displayName || "unknown";
 
-        const response = await fetch(
-          `${apiBaseUrl}/api/score/get-score/${privyID}/${username}/null`,
-          {
-            method: "GET",
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-
-        if (!response.ok) throw new Error("Failed to fetch score");
-
-        const data = await response.json();
+        // Use the API client for consistent error handling
+        const data = await getScore(privyID, username, null);
         setScore(data?.score || 0);
-      } catch (err) {
-        setError(err.message);
+      } catch (error: any) {
+        console.error("Error fetching score:", error);
+        setError(error.message);
       } finally {
         setLoading(false);
       }
@@ -104,29 +94,18 @@ const loginWithTwit = async () => {
     fetchScore();
   }, [user]);
 
-
+  // Start animation when user is logged in and score is available
   useEffect(() => {
-    if (user && targetScore) {
+    if (user && targetScore > 0) {
       handleConnect();
     }
   }, [user, targetScore]);
   
-  // ✅ Login with Twitter
-  const loginWithTwitter = async () => {
-    try {
-      const result = await signInWithPopup(auth, twitterProvider);
-      setUser(result.user);
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    }
-  };
-
   // ✅ Logout
   const logout = async () => {
     await signOut(auth);
     setUser(null);
-    setScore(null);
+    setScore(0);
   };
 
   // ✅ Handle Connection Process

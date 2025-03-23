@@ -694,16 +694,41 @@ const Analysis = () => {
         try {
           setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "processing" })
           const canvas = await html2canvas(scoreCardRef.current)
-          canvas.toBlob((blob) => {
-            const item = new ClipboardItem({ "image/png": blob })
-            navigator.clipboard.write([item])
-            setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "copied" })
-          })
+          
+          // Check if Clipboard API and ClipboardItem are supported
+          if (navigator.clipboard && window.ClipboardItem) {
+            canvas.toBlob((blob) => {
+              if (blob) {
+                const item = new ClipboardItem({ "image/png": blob })
+                navigator.clipboard.write([item])
+                  .then(() => {
+                    setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "copied" })
+                  })
+                  .catch(err => {
+                    console.error("Error copying image:", err)
+                    // Fallback to download if copying fails
+                    downloadFallback(canvas)
+                  })
+              }
+            })
+          } else {
+            // Fallback for browsers that don't support ClipboardItem
+            downloadFallback(canvas)
+          }
         } catch (err) {
           console.error("Error copying image:", err)
           setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "error" })
         }
       }
+    }
+  
+    // Fallback download function for browsers without clipboard support
+    const downloadFallback = (canvas) => {
+      const link = document.createElement("a")
+      link.download = `cluster-scorecard-${currentUser.handle}.png`
+      link.href = canvas.toDataURL("image/png")
+      link.click()
+      setScoreCardCopyStatus({ ...scoreCardCopyStatus, image: "downloaded" })
     }
   
     // Function to download score card as image
@@ -713,13 +738,13 @@ const Analysis = () => {
           setPreparingDownload(true)
           // Wait for the state to update and re-render
           await new Promise((resolve) => setTimeout(resolve, 100))
-  
+
           const canvas = await html2canvas(scoreCardRef.current)
           const link = document.createElement("a")
           link.download = `cluster-scorecard-${currentUser.handle}.png`
           link.href = canvas.toDataURL("image/png")
           link.click()
-  
+
           // Reset back to view mode
           setPreparingDownload(false)
         } catch (err) {

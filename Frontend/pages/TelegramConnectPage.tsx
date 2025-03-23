@@ -1,207 +1,173 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { MessageSquare } from 'lucide-react';
-import GlassmorphicCard from '@/components/GlassmorphicCard';
+import React, { useState, useEffect } from 'react';
+import Verida from '../components/Verida';
+import Lottie from 'lottie-react';
+import telegramAnim from '@/assets/telegram-animation.json';
+import LayoutWithAnimation from '@/layouts/LayoutWithAnimation';
+import { AnimatePresence, motion } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
+import axios from 'axios';
+import { usePrivy } from '@privy-io/react-auth';
 import CyberButton from '@/components/CyberButton';
-import PageTransition from '@/components/PageTransition';
-import AnimatedCheckmark from '@/components/AnimatedCheckmark';
-import FloatingElements from '@/components/FloatingElements';
-import ScoreDisplay from '@/components/ScoreDisplay';
-import { useScore } from '@/context/ScoreContext';
-import Verida from '@/components/Verida';
-
-const telegramTasks = [
-  'Checking Group Memberships',
-  'Analyzing Activity & Replies',
-  'Measuring Influence in Key Groups',
-  'Detecting Admin/Mod Roles'
-];
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 
 const TelegramConnectPage = () => {
+  const { user } = usePrivy();
   const navigate = useNavigate();
-  const { setTelegramScore, setTelegramConnected, twitterConnected } = useScore();
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [taskStatus, setTaskStatus] = useState<boolean[]>([false, false, false, false]);
-  const [completedScan, setCompletedScan] = useState(false);
-  const [score, setScore] = useState(0);
-  const [veridaStatus, setVeridaStatus] = useState<'disconnected' | 'connected'>('disconnected');
-  const targetScore = 5250;
+  const [isConnected, setIsConnected] = useState(false);
+  const [animState, setAnimState] = useState<'initial' | 'connected' | 'completed'>('initial');
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
   
-  // Animation sequence for after Verida connection
-  const startAnimationSequence = () => {
-    console.log("🚀 Starting Telegram animation sequence...");
-    setIsConnecting(true);
+  // Handle connection status change from Verida component
+  const handleConnectionChange = (connected: boolean) => {
+    setIsConnected(connected);
     
-    // Step 1: Task animation
-    let currentTask = 0;
-    const taskInterval = setInterval(() => {
-      if (currentTask < taskStatus.length) {
-        setTaskStatus(prev => {
-          const newStatus = [...prev];
-          newStatus[currentTask] = true;
-          return newStatus;
-        });
-        currentTask++;
-      } else {
-        clearInterval(taskInterval);
-        setCompletedScan(true);
-        
-        // Step 2: Score animation
-        let currentScore = 0;
-        const scoreIncrement = Math.ceil(targetScore / 50);
-        const scoreInterval = setInterval(() => {
-          currentScore += scoreIncrement;
-          if (currentScore >= targetScore) {
-            currentScore = targetScore;
-            clearInterval(scoreInterval);
-            
-            // Step 3: Redirect after animation finishes
-            setTimeout(() => {
-              console.log("✅ Animation complete, redirecting to /scorecard");
-              setTelegramScore(targetScore);
-              setTelegramConnected(true);
-              navigate('/scorecard');
-            }, 2000);
-          }
-          setScore(currentScore);
-        }, 30);
-      }
-    }, 800);
-  };
-  
-  // Handler for Verida connection status changes
-  const handleVeridaStatusChange = (status: boolean) => {
-    console.log("📱 Verida connection status:", status ? "connected" : "disconnected");
-    if (status) {
-      setVeridaStatus('connected');
+    if (connected) {
+      setAnimState('connected');
+      
+      // After 2 seconds, change to the completed state
+      setTimeout(() => {
+        setAnimState('completed');
+      }, 2000);
     } else {
-      setVeridaStatus('disconnected');
+      setAnimState('initial');
     }
   };
   
-  // Start animation when Verida is connected
-  useEffect(() => {
-    if (veridaStatus === 'connected' && !isConnecting && !completedScan) {
-      console.log("🔄 Starting animation for connected Verida");
-      startAnimationSequence();
-    }
-  }, [veridaStatus, isConnecting, completedScan]);
+  // Query for user's score
+  const { data: scoreData, isLoading: isLoadingScore } = useQuery({
+    queryKey: ['score', user?.id],
+    queryFn: async () => {
+      if (!user?.id) return null;
+      
+      try {
+        // Use Twitter username as a placeholder if we don't have the actual username
+        const placeholderUsername = user.twitter?.username || 'placeholder';
+        const response = await axios.get(`${apiBaseUrl}/api/score/total-score/${user.id}`);
+        return response.data;
+      } catch (error) {
+        console.error('Failed to fetch score data:', error);
+        return null;
+      }
+    },
+    enabled: !!user?.id,
+  });
   
-  // Manual connect button (fallback)
-  const handleConnect = () => {
-    startAnimationSequence();
+  // Effects to check if user already has a Telegram score
+  useEffect(() => {
+    if (scoreData?.telegram?.score) {
+      setIsConnected(true);
+      setAnimState('completed');
+    }
+  }, [scoreData]);
+  
+  // Animation states
+  const initialAnimation = {
+    width: '100%',
+    height: '100%',
+  };
+  
+  const connectedAnimation = {
+    width: '60%',
+    height: '60%',
+  };
+  
+  const completedAnimation = {
+    width: '40%',
+    height: '40%',
+    opacity: 0.7,
+  };
+  
+  const getAnimationStyle = () => {
+    switch (animState) {
+      case 'initial':
+        return initialAnimation;
+      case 'connected':
+        return connectedAnimation;
+      case 'completed':
+        return completedAnimation;
+    }
   };
   
   return (
-    <PageTransition>
-      <div className="min-h-screen w-full flex items-center justify-center relative overflow-hidden p-4">
-        <FloatingElements type="messages" count={20} />
-        
-        {/* Main content */}
-        <div className="relative z-10 flex flex-col items-center justify-center text-center px-4 w-full max-w-md">
-          {/* Progress steps */}
-          <motion.div 
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex justify-center gap-2 mb-6"
-          >
-            {[1, 2, 3, 4].map((_, i) => (
-              <div 
-                key={i} 
-                className={`w-12 h-1 rounded-full ${i <= 2 ? 'bg-cyber-green/70' : 'bg-white/20'}`}
-              />
-            ))}
-          </motion.div>
+    <LayoutWithAnimation
+      sideContent={
+        <div className="flex flex-col h-full">
+          <div className="flex items-center mb-8">
+            <button
+              onClick={() => navigate(-1)}
+              className="p-2 mr-2 rounded-full hover:bg-white/5 transition-colors"
+            >
+              <ArrowLeft size={20} className="text-white/70" />
+            </button>
+            <h1 className="text-2xl font-bold text-white">Connect Telegram</h1>
+          </div>
           
-          <GlassmorphicCard className="w-full mb-6">
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="flex justify-center mb-4"
-            >
-              <div className="w-12 h-12 rounded-full bg-cyber-blue/10 border border-cyber-blue/30 flex items-center justify-center">
-                <MessageSquare size={24} className="text-cyber-blue" />
+          <div className="flex-1 flex flex-col justify-between">
+            <div className="space-y-4">
+              <p className="text-white/70">
+                Connect your Telegram account to analyze your group participation and calculate your FOMO score.
+              </p>
+              
+              <div className="bg-white/5 p-4 rounded-lg">
+                <h3 className="text-lg font-medium text-white mb-2">How it works</h3>
+                <ol className="list-decimal list-inside text-white/70 space-y-2">
+                  <li>Connect your Telegram account using Verida</li>
+                  <li>We'll analyze your group participation</li>
+                  <li>Your FOMO score will be calculated based on activity</li>
+                </ol>
               </div>
-            </motion.div>
-            
-            <motion.h2
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              className="text-2xl font-bold mb-2 text-white"
-            >
-              {isConnecting ? "Analyzing Your Telegram" : "Connect Your Telegram"}
-            </motion.h2>
-            
-            <motion.p
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 }}
-              className="text-white/70 mb-6"
-            >
-              {isConnecting 
-                ? "Your community engagement defines your social rank." 
-                : "Your community engagement matters. Let's analyze it!"}
-            </motion.p>
-            
-            {!isConnecting && (
-              <div className="relative">
-                <Verida onConnectionChange={handleVeridaStatusChange} />
+              
+              <div className="bg-white/5 p-4 rounded-lg">
+                <h3 className="text-lg font-medium text-white mb-2">Privacy</h3>
+                <p className="text-white/70">
+                  Your Telegram data is analyzed securely. We don't store messages
+                  or personal content - only metrics used for your FOMO score.
+                </p>
               </div>
-            )}
-            
-            {/* Show Scanning Animation */}
-            {isConnecting && (
-              <div className="text-left">
-                {telegramTasks.map((task, index) => (
-                  <AnimatedCheckmark 
-                    key={index} 
-                    text={task} 
-                    completed={taskStatus[index]} 
-                    index={index} 
-                  />
-                ))}
-              </div>
-            )}
-
-            <div className="flex flex-col items-center gap-2 mt-4">
-              {!isConnecting && (
-                <button
-                  onClick={() => navigate("/scorecard")}
-                  className="mt-4 text-white/80 hover:text-white text-sm underline transition-opacity duration-200 ease-in-out"
-                >
-                  Skip for now
-                </button>
-              )}
             </div>
-
-            {/* Show Score After Scan */}
-            {completedScan && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.5, duration: 0.3 }}
-                className="mt-6"
-              >
-                <ScoreDisplay score={score} label="Points Earned" variant="accent" />
-              </motion.div>
+            
+            {animState === 'completed' && (
+              <div className="mt-6">
+                <CyberButton
+                  onClick={() => navigate('/score')}
+                  variant="accent"
+                  className="w-full"
+                >
+                  View Your FOMO Score
+                </CyberButton>
+              </div>
             )}
-          </GlassmorphicCard>
-          
-          {/* Connector line animation */}
-          {completedScan && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 40, opacity: 1 }}
-              transition={{ delay: 0.8, duration: 0.5 }}
-              className="w-0.5 h-10 bg-gradient-to-b from-cyber-blue to-transparent mb-4"
-            />
-          )}
+          </div>
         </div>
-      </div>
-    </PageTransition>
+      }
+      mainContent={
+        <div className="h-full flex flex-col justify-between p-4">
+          <div className="flex-1 flex items-center justify-center">
+            <AnimatePresence>
+              <motion.div
+                key={animState}
+                initial={{ opacity: 0.5, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.5 }}
+                style={getAnimationStyle()}
+                className="relative flex items-center justify-center transition-all duration-500"
+              >
+                <Lottie 
+                  animationData={telegramAnim} 
+                  loop={animState === 'initial'} 
+                  className="max-w-full max-h-full"
+                />
+              </motion.div>
+            </AnimatePresence>
+          </div>
+          
+          <div className="w-full mt-8">
+            <Verida onConnectionChange={handleConnectionChange} />
+          </div>
+        </div>
+      }
+    />
   );
 };
 
